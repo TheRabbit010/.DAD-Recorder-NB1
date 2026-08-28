@@ -54,9 +54,8 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
-# 💡 ล็อคค่าพารามิเตอร์ไบนารีที่ถูกต้อง 100% จากการวิเคราะห์ Matrix
 HEADER_OFFSET = 512
-STRIDE_LENGTH = 89   # ระยะก้าว 89 คำ (178 Bytes) ต่อ 1 เฟรมเวลา
+STRIDE_LENGTH = 89
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"
 
@@ -128,9 +127,9 @@ if uploaded_files:
 
             df_single = pd.DataFrame(data_dict)
 
-            # พยายามสร้างแกนเวลา (Time Axis)
             file_start_dt = extract_start_time_from_filename(file.name)
-            time_axis = pd.date_range(start=file_start_dt, periods=total_records, freq="1S") # ค่าเริ่มต้น 1 วิ/จุด
+            # 💡 แก้ไข freq="1S" เป็น freq="1s" เพื่อรองรับ pandas รุ่นใหม่
+            time_axis = pd.date_range(start=file_start_dt, periods=total_records, freq="1s")
             df_single.insert(0, "Datetime", time_axis)
             
             all_dfs.append(df_single)
@@ -146,7 +145,7 @@ if uploaded_files:
         num_files_str = f"({len(sorted_files)} Files)"
 
         # ==========================================
-        # 📥 ปุ่ม Export Excel / CSV ด้านข้าง
+        # 📥 ปุ่ม Export Excel / CSV
         # ==========================================
         st.sidebar.divider()
         st.sidebar.header("📥 ดาวน์โหลดข้อมูล (Export)")
@@ -182,9 +181,6 @@ if uploaded_files:
         with st.expander("🔍 ดูตารางข้อมูลดิบ (ตรวจเช็คความถูกต้องของตัวเลข)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
-        # ----------------------------------------
-        # ฟังก์ชันวาดกราฟ
-        # ----------------------------------------
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
             fig.update_layout(
                 height=380,
@@ -226,7 +222,6 @@ if uploaded_files:
                         showlegend=False, hoverinfo="skip"
                     ), secondary_y=is_sec)
 
-        # 1. Top Zones 
         st.subheader(f"📐 Top Zones Timeline {num_files_str}")
         fig_top = make_subplots(specs=[[{"secondary_y": False}]])
         for idx, col in enumerate(top_names):
@@ -239,7 +234,6 @@ if uploaded_files:
         apply_white_theme_style(fig_top, "Temperature [°C]", y_range=None)
         st.plotly_chart(fig_top, use_container_width=True)
 
-        # 2. Bottom Zones
         st.subheader(f"📐 Bottom Zones Timeline {num_files_str}")
         fig_bot = make_subplots(specs=[[{"secondary_y": False}]])
         for idx, col in enumerate(bot_names):
@@ -252,7 +246,6 @@ if uploaded_files:
         apply_white_theme_style(fig_bot, "Temperature [°C]", y_range=None)
         st.plotly_chart(fig_bot, use_container_width=True)
 
-        # 3. Dryer Temperatures
         st.subheader(f"🔥 Dryer Temperatures Timeline {num_files_str}")
         fig_dryer = make_subplots(specs=[[{"secondary_y": False}]])
         fig_dryer.add_trace(go.Scatter(
@@ -265,7 +258,6 @@ if uploaded_files:
         apply_white_theme_style(fig_dryer, "Temperature [°C]", y_range=None)
         st.plotly_chart(fig_dryer, use_container_width=True)
 
-        # 4. Oxygen & N2
         st.subheader(f"🧪 Oxygen Concentration & N2 Flow Timeline {num_files_str}")
         fig_o2_n2 = make_subplots(specs=[[{"secondary_y": True}]])
         fig_o2_n2.add_trace(go.Scatter(
@@ -282,7 +274,6 @@ if uploaded_files:
         fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True, showgrid=False)
         st.plotly_chart(fig_o2_n2, use_container_width=True)
 
-        # 5. Dew Point
         st.subheader(f"💧 Dew Point Timeline {num_files_str}")
         fig_dew = make_subplots(specs=[[{"secondary_y": False}]])
         fig_dew.add_trace(go.Scatter(
