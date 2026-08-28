@@ -11,7 +11,7 @@ st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
 st.title("📊 DAD Time-Series Visualizer")
 
 # ==========================================
-# แถบตั้งค่าด้านข้าง (Sidebar)
+# แถบตั้งค่าด้านข้าง (Sidebar) - ตัดการถอดรหัสไฟล์ออกตามสั่ง
 # ==========================================
 st.sidebar.header("⏰ การตั้งค่าเวลา (Time Settings)")
 start_date = st.sidebar.date_input("วันที่เริ่มต้นไฟล์แรก", pd.to_datetime("today"))
@@ -20,21 +20,17 @@ sample_rate_sec = st.sidebar.number_input("ความถี่ในการ�
 current_start_datetime = datetime.combine(start_date, start_time)
 
 st.sidebar.divider()
-st.sidebar.header("🔧 การถอดรหัสไฟล์ (Binary Decoder)")
-endian_option = st.sidebar.selectbox("ระบบลำดับไบต์ (Byte Order)", ["Big-Endian (>i2) - Yokogawa", "Little-Endian (<i2)"], index=0)
-scale_divider = st.sidebar.number_input("ตัวหารปรับสเกลค่า (Divider)", value=10.0, step=1.0, help="เช่น 6141 / 10.0 = 614.1 °C")
-header_offset = st.sidebar.number_input("Header Offset (Bytes)", value=512, step=64)
-
-st.sidebar.divider()
 st.sidebar.header("⚙️ แสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
-dtype_str = ">i2" if "Big-Endian" in endian_option else "<i2"
+# ==========================================
+# โครงสร้างถอดรหัสไบนารี Yokogawa (.DAD) 20 Channels
+# ==========================================
+HEADER_OFFSET = 512
+SCALE_DIVIDER = 10.0
+DTYPE_STR = ">i2"  # Big-Endian Signed Int16 สำหรับเครื่อง Yokogawa
 
-# ==========================================
-# การกำหนด Mapping สัญญาณตาม ch_info (20 Channels)
-# ==========================================
 ch_info = {
     1: "Z#1 Top",
     2: "Z#2 Top",
@@ -75,14 +71,17 @@ if uploaded_files:
     for file in sorted_files:
         try:
             binary_data = file.read()
-            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(dtype_str), offset=int(header_offset)).astype(float)
             
-            if scale_divider != 0:
-                raw_signals = raw_signals / scale_divider
+            # ถอดรหัสสัญญาณไบนารี Big-Endian Int16 ข้าม Header 512 Bytes
+            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
+            
+            # หาร 10.0 เพื่อปรับค่ากลับเป็นทศนิยมจริง
+            scaled_signals = raw_signals / SCALE_DIVIDER
 
-            points_per_channel = len(raw_signals) // num_channels
-            reshaped_data = raw_signals[:points_per_channel * num_channels].reshape(points_per_channel, num_channels)
+            points_per_channel = len(scaled_signals) // num_channels
+            reshaped_data = scaled_signals[:points_per_channel * num_channels].reshape(points_per_channel, num_channels)
 
+            # สร้างแกนเวลาแบบต่อเนื่อง
             time_freq = f"{int(sample_rate_sec * 1000)}ms"
             time_axis = pd.date_range(start=current_start_datetime, periods=points_per_channel, freq=time_freq)
             
