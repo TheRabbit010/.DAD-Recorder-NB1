@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 
-# 1. ตั้งค่าหน้าจอแบบกว้าง
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
 
 st.title("📊 DAD Time-Series Visualizer")
@@ -14,19 +13,10 @@ st.title("📊 DAD Time-Series Visualizer")
 # ==========================================
 # แถบตั้งค่าด้านข้าง (Sidebar)
 # ==========================================
-st.sidebar.header("⏰ ตั้งค่าเวลาสำรอง (กรณีชื่อไฟล์ไม่มีเวลา)")
+st.sidebar.header("⏰ ตั้งค่าเวลาสำรอง (Fallback Time)")
 start_date = st.sidebar.date_input("วันที่เริ่มต้น", pd.to_datetime("today"))
 start_time = st.sidebar.time_input("เวลาเริ่มต้น", pd.to_datetime("08:00").time())
 fallback_start_datetime = datetime.combine(start_date, start_time)
-
-st.sidebar.divider()
-st.sidebar.header("🔧 ปรับแต่งโครงสร้างไฟล์ (Binary Format)")
-array_order = st.sidebar.selectbox(
-    "การจัดเรียง Array สัญญาณ",
-    ["Fortran Order (Channel-Sequential) - แนะนำ", "C-Order (Interleaved)"],
-    index=0,
-    help="หากกราฟเกิดลายฟันปลาขึ้นลงรุนแรง ให้เลือก Fortran Order"
-)
 
 st.sidebar.divider()
 st.sidebar.header("⚙️ การแสดงผล (Display Options)")
@@ -34,11 +24,30 @@ show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Sh
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้างถอดรหัส Yokogawa .DAD 20 Channels
+# โครงสร้าง Mapping ตามไฟล์จริง
 # ==========================================
-HEADER_OFFSET = 512
-SCALE_DIVIDER = 10.0
-DTYPE_STR = ">i2"  # Big-Endian Signed Int16
+col_mapping = {
+    1: 4,   # CH01 -> Z#1 Top
+    2: 6,   # CH02 -> Z#2 Top
+    3: 8,   # CH03 -> Z#3 Top
+    4: 10,  # CH04 -> Z#4 Top
+    5: 12,  # CH05 -> Z#5 Top
+    6: 14,  # CH06 -> Z#6 Top
+    7: 16,  # CH07 -> Z#7 Top
+    8: 18,  # CH08 -> Z#1 Bottom
+    9: 20,  # CH09 -> Z#2 Bottom
+    10: 22, # CH10 -> Z#3 Bottom
+    11: 24, # CH11 -> Z#4 Bottom
+    12: 26, # CH12 -> Z#5 Bottom
+    13: 28, # CH13 -> Z#6 Bottom
+    14: 30, # CH14 -> Z#7 Bottom
+    15: 32, # CH15 -> O2 Exit
+    16: 36, # CH16 -> Dryer #1
+    17: 38, # CH17 -> Dryer #2
+    18: 84, # CH18 -> N2 Flow
+    19: 88, # CH19 -> O2 Entrance
+    20: 86, # CH20 -> Dew Point
+}
 
 ch_info = {
     1: "Z#1 Top", 2: "Z#2 Top", 3: "Z#3 Top", 4: "Z#4 Top",
@@ -49,10 +58,14 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
+HEADER_OFFSET = 512
+SCALE_DIVIDER = 10.0
+DTYPE_STR = ">i2"  # Big-Endian Signed Int16
+STRIDE = 90        # จำนวนคอลัมน์ทั้งหมดต่อ 1 เฟรมการบันทึก
+
 top_names = [ch_info[i] for i in range(1, 8)]
 bot_names = [ch_info[i] for i in range(8, 15)]
-col_names = [ch_info[i] for i in range(1, 21)]
-num_channels = len(col_names)
+all_col_names = [ch_info[i] for i in range(1, 21)]
 
 COLOR_PALETTE = [
     "#8e44ad", "#2980b9", "#27ae60", "#d35400", 
@@ -62,21 +75,16 @@ COLOR_PALETTE = [
     "#e67e22", "#1abc9c", "#3498db", "#9b59b6"
 ]
 
-# ฟังก์ชันถอดรหัส Date & Time จากชื่อไฟล์จริง (เช่น ..._DATA260825_160000.DAD)
 def extract_datetime_from_filename(filename, default_dt):
-    # ค้นหาแพทเทิร์นตัวเลข 6 ตัว สองชุด เช่น 260825_160000
     match = re.search(r'(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})', filename)
     if match:
         p1, p2, p3, hh, min_s, ss = map(int, match.groups())
-        
-        # ตรวจสอบรูปแบบ YYMMDD หรือ DDMMYY
-        if p1 == 26 or p1 == 25: # กรณี YYMMDD (ปี 2026/2025)
+        if p1 in [25, 26]:
             year, mm, dd = 2000 + p1, p2, p3
-        elif p3 == 26 or p3 == 25: # กรณี DDMMYY
+        elif p3 in [25, 26]:
             dd, mm, year = p1, p2, 2000 + p3
         else:
             year, mm, dd = 2000 + p1, p2, p3
-
         try:
             return datetime(year, mm, dd, hh, min_s, ss), True
         except ValueError:
@@ -98,19 +106,20 @@ if uploaded_files:
             raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
             scaled_signals = raw_signals / SCALE_DIVIDER
 
-            points_per_channel = len(scaled_signals) // num_channels
-            usable_points = points_per_channel * num_channels
-            
-            # 💡 แก้อาการฟันปลา: ใช้ order='F' (Fortran-order) เพื่อเรียงข้อมูลต่อกันทีละช่องสัญญาณ
-            order_code = 'F' if "Fortran" in array_order else 'C'
-            reshaped_data = scaled_signals[:usable_points].reshape((points_per_channel, num_channels), order=order_code)
+            total_records = len(scaled_signals) // STRIDE
+            reshaped_full = scaled_signals[:total_records * STRIDE].reshape(total_records, STRIDE)
+
+            data_dict = {}
+            for ch_num, col_idx in col_mapping.items():
+                ch_name = ch_info[ch_num]
+                data_dict[ch_name] = reshaped_full[:, col_idx]
 
             start_dt, has_auto_dt = extract_datetime_from_filename(file.name, fallback_start_datetime)
 
             file_info_list.append({
                 "file_name": file.name,
-                "data": reshaped_data,
-                "total_rows": points_per_channel,
+                "df_data": pd.DataFrame(data_dict),
+                "total_rows": total_records,
                 "start_datetime": start_dt,
                 "has_auto_dt": has_auto_dt
             })
@@ -124,7 +133,6 @@ if uploaded_files:
         for i, info in enumerate(file_info_list):
             total_rows = info["total_rows"]
             
-            # คำนวณแกนเวลาต่อเนื่องจากไฟล์จริง
             if i < len(file_info_list) - 1 and info["has_auto_dt"] and file_info_list[i+1]["has_auto_dt"]:
                 delta_sec = (file_info_list[i+1]["start_datetime"] - info["start_datetime"]).total_seconds()
                 auto_sample_rate = delta_sec / total_rows if total_rows > 0 else 1.0
@@ -137,7 +145,7 @@ if uploaded_files:
             time_axis = pd.date_range(start=file_start_time, periods=total_rows, freq=time_freq)
             current_time_cursor = time_axis[-1] + pd.Timedelta(milliseconds=max(1, int(auto_sample_rate * 1000)))
 
-            df_single = pd.DataFrame(info["data"], columns=col_names)
+            df_single = info["df_data"].copy()
             df_single.insert(0, "Datetime", time_axis)
             all_dfs.append(df_single)
 
@@ -150,7 +158,6 @@ if uploaded_files:
         with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
-        # สไตล์พื้นหลังสีขาว ฟอร์แมตเวลาเหมือนรูปตัวอย่าง image_7b303c.png
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
             fig.update_layout(
                 height=400,
@@ -167,7 +174,7 @@ if uploaded_files:
             )
             fig.update_xaxes(
                 title_text="Date & Time",
-                tickformat="%d/%m\n%H:%M", # แสดงผล วัน/เดือน เวลา เหมือนรูปตัวอย่าง
+                tickformat="%d/%m\n%H:%M",
                 showgrid=True,
                 gridcolor="#E5E5E5",
                 gridwidth=1
