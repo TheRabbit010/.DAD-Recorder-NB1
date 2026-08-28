@@ -1,9 +1,10 @@
+import re
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 1. ตั้งค่าหน้าจอ
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
@@ -11,13 +12,13 @@ st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
 st.title("📊 DAD Time-Series Visualizer")
 
 # ==========================================
-# แถบตั้งค่าด้านข้าง (Sidebar)
+# แถบตั้งค่าด้านข้าง (Sidebar) - ตัดการกรอกความถี่บันทึกออกแล้ว
 # ==========================================
-st.sidebar.header("⏰ การตั้งค่าเวลา (Time Settings)")
-start_date = st.sidebar.date_input("วันที่เริ่มต้นไฟล์แรก", pd.to_datetime("today"))
-start_time = st.sidebar.time_input("เวลาเริ่มต้นไฟล์แรก", pd.to_datetime("08:00").time())
-sample_rate_sec = st.sidebar.number_input("ความถี่ในการบันทึก (วินาที/จุด)", min_value=0.1, value=1.0, step=0.1)
-current_start_datetime = datetime.combine(start_date, start_time)
+st.sidebar.header("⏰ การตั้งค่าเวลาสำรอง (Fallback Time)")
+st.sidebar.caption("ใช้เมื่อไม่สามารถตรวจจับเวลาจากชื่อไฟล์ได้")
+start_date = st.sidebar.date_input("วันที่เริ่มต้น", pd.to_datetime("today"))
+start_time = st.sidebar.time_input("เวลาเริ่มต้น", pd.to_datetime("08:00").time())
+fallback_start_datetime = datetime.combine(start_date, start_time)
 
 st.sidebar.divider()
 st.sidebar.header("⚙️ แสดงผล (Display Options)")
@@ -83,6 +84,18 @@ bot_names = [ch_info[i] for i in range(8, 15)]
 col_names = [ch_info[i] for i in range(1, 21)]
 num_channels = len(col_names)
 
+# ฟังก์ชันตรวจจับ วันที่และเวลา จากชื่อไฟล์อัตโนมัติ (เช่น YYMMDD_HHMMSS)
+def extract_datetime_from_filename(filename, default_dt):
+    match = re.search(r'(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})', filename)
+    if match:
+        yy, mm, dd, hh, min_s, ss = map(int, match.groups())
+        year = 2000 + yy
+        try:
+            return datetime(year, mm, dd, hh, min_s, ss), True
+        except ValueError:
+            return default_dt, False
+    return default_dt, False
+
 # ==========================================
 # อัปโหลดและประมวลผลไฟล์
 # ==========================================
@@ -90,17 +103,15 @@ uploaded_files = st.file_uploader("เลือกไฟล์ .DAD / .DAT", typ
 
 if uploaded_files:
     sorted_files = sorted(uploaded_files, key=lambda x: x.name)
-    all_dfs = []
+    file_info_list = []
 
+    # รอบที่ 1: อ่านข้อมูลดิบและถอดรหัสหาจำนวนจุดข้อมูลพร้อมเวลาเริ่มต้นของแต่ละไฟล์
     for file in sorted_files:
         try:
             binary_data = file.read()
-            
-            # ถอดรหัสสัญญาณไบนารี Big-Endian Int16
             raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
             scaled_signals = raw_signals / SCALE_DIVIDER
 
-            # ดึงข้อมูลตาม Stride และ Map เข้าคอลัมน์ที่ถูกต้อง
             total_rows = len(scaled_signals) // STRIDE
             reshaped_full = scaled_signals[:total_rows * STRIDE].reshape(total_rows, STRIDE)
 
@@ -109,24 +120,47 @@ if uploaded_files:
                 if col_idx < STRIDE:
                     extracted_data[:, ch_idx - 1] = reshaped_full[:, col_idx]
 
-            # สร้างแกนเวลา
-            time_freq = f"{int(sample_rate_sec * 1000)}ms"
-            time_axis = pd.date_range(start=current_start_datetime, periods=total_rows, freq=time_freq)
-            
-            current_start_datetime = time_axis[-1] + pd.Timedelta(seconds=sample_rate_sec)
+            start_dt, has_auto_dt = extract_datetime_from_filename(file.name, fallback_start_datetime)
 
-            df_single = pd.DataFrame(extracted_data, columns=col_names)
-            df_single.insert(0, "Datetime", time_axis)
-            all_dfs.append(df_single)
-
+            file_info_list.append({
+                "file_name": file.name,
+                "data": extracted_data,
+                "total_rows": total_rows,
+                "start_datetime": start_dt,
+                "has_auto_dt": has_auto_dt
+            })
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์ {file.name}: {e}")
 
-    if all_dfs:
+    # รอบที่ 2: คำนวณ Sampling Rate (ความถี่บันทึก) อัตโนมัติและสร้างแกนเวลาแบบต่อเนื่อง
+    if file_info_list:
+        all_dfs = []
+        current_time_cursor = fallback_start_datetime
+
+        for i, info in enumerate(file_info_list):
+            total_rows = info["total_rows"]
+            
+            # คำนวณความถี่อัตโนมัติจากระยะห่างของไฟล์ถัดไป (ถ้ามี)
+            if i < len(file_info_list) - 1 and info["has_auto_dt"] and file_info_list[i+1]["has_auto_dt"]:
+                delta_sec = (file_info_list[i+1]["start_datetime"] - info["start_datetime"]).total_seconds()
+                auto_sample_rate = delta_sec / total_rows if total_rows > 0 else 1.0
+                file_start_time = info["start_datetime"]
+            else:
+                auto_sample_rate = 1.0  # ค่าเริ่มต้น 1 วินาที/จุด หากเป็นไฟล์เดี่ยว
+                file_start_time = info["start_datetime"] if info["has_auto_dt"] else current_time_cursor
+
+            time_freq = f"{int(auto_sample_rate * 1000)}ms"
+            time_axis = pd.date_range(start=file_start_time, periods=total_rows, freq=time_freq)
+            current_time_cursor = time_axis[-1] + pd.Timedelta(milliseconds=int(auto_sample_rate * 1000))
+
+            df_single = pd.DataFrame(info["data"], columns=col_names)
+            df_single.insert(0, "Datetime", time_axis)
+            all_dfs.append(df_single)
+
         full_df = pd.concat(all_dfs, ignore_index=True)
 
-        # ตัดเวลาที่ซ้ำกันออกและเรียงลำดับเวลา
-        full_df = full_df.sort_values(by="Datetime")
+        # 💡 ป้องกันกราฟขาด/ฟันปลา: เรียงลำดับเวลาให้ถูกต้อง และตัดจุดเวลาที่ซ้ำซ้อน
+        full_df = full_df.sort_values(by="Datetime").reset_index(drop=True)
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
         num_files_str = f"({len(sorted_files)} Files)"
@@ -162,6 +196,7 @@ if uploaded_files:
         for col in top_names:
             fig_top.add_trace(go.Scatter(
                 x=full_df["Datetime"], y=full_df[col], name=col,
+                connectgaps=False,
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
         add_max_min_markers(fig_top, full_df, top_names)
@@ -170,7 +205,6 @@ if uploaded_files:
             margin=dict(l=40, r=40, t=30, b=30),
             legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
         )
-        # 💡 ปรับเพิ่ม %S (วินาที) ใน tickformat เพื่อป้องกันปัญหาสเกลเวลาโชว์ซ้ำกัน
         fig_top.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
         fig_top.update_yaxes(title_text="Temperature [°C]", range=[400, 650])
         st.plotly_chart(fig_top, use_container_width=True)
@@ -183,6 +217,7 @@ if uploaded_files:
         for col in bot_names:
             fig_bot.add_trace(go.Scatter(
                 x=full_df["Datetime"], y=full_df[col], name=col,
+                connectgaps=False,
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
         add_max_min_markers(fig_bot, full_df, bot_names)
@@ -203,12 +238,12 @@ if uploaded_files:
 
         fig_dryer.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["Dryer #1"], name="Dryer #1",
-            line=dict(color="#00b894", width=1.5),
+            line=dict(color="#00b894", width=1.5), connectgaps=False,
             hovertemplate="Dryer #1: %{y:.1f} °C<extra></extra>"
         ))
         fig_dryer.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["Dryer #2"], name="Dryer #2",
-            line=dict(color="#ffa500", width=1.5),
+            line=dict(color="#ffa500", width=1.5), connectgaps=False,
             hovertemplate="Dryer #2: %{y:.1f} °C<extra></extra>"
         ))
 
@@ -231,19 +266,19 @@ if uploaded_files:
 
         fig_o2_n2.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["O2 Exit"], name="O2 Exit",
-            line=dict(color="red", width=1.5),
+            line=dict(color="red", width=1.5), connectgaps=False,
             hovertemplate="O2 Exit: %{y:.1f} ppm<extra></extra>"
         ), secondary_y=False)
 
         fig_o2_n2.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["O2 Entrance"], name="O2 Entrance",
-            line=dict(color="#1e90ff", width=1.5),
+            line=dict(color="#1e90ff", width=1.5), connectgaps=False,
             hovertemplate="O2 Entrance: %{y:.1f} ppm<extra></extra>"
         ), secondary_y=False)
 
         fig_o2_n2.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["N2 Flow"], name="N2 Flow",
-            line=dict(color="#2ed573", width=1.2, dash="dash"),
+            line=dict(color="#2ed573", width=1.2, dash="dash"), connectgaps=False,
             hovertemplate="N2 Flow: %{y:.1f}<extra></extra>"
         ), secondary_y=True)
 
@@ -267,7 +302,7 @@ if uploaded_files:
 
         fig_dew.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["Dew Point"], name="Dew Point",
-            line=dict(color="#a55eea", width=1.5),
+            line=dict(color="#a55eea", width=1.5), connectgaps=False,
             hovertemplate="Dew Point: %{y:.1f} °Cdp<extra></extra>"
         ))
 
