@@ -1,147 +1,114 @@
-import pandas as pd
-import plotly.express as px
 import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+from datetime import datetime
 
-st.set_page_config(page_title="DAD Time-Series Visualizer", layout="wide", page_icon="📈")
+# 1. ตั้งค่าหน้าจอแบบขยายกว้างเต็มตา
+st.set_page_config(layout="wide", page_title="DAD Binary Visualizer")
 
-st.title("📈 DAD Time-Series Visualizer (Auto Encoding & Time)")
-st.write("อัปโหลดไฟล์ `.DAD` โดยระบบจะตรวจจับตัวถอดรหัสภาษา (UTF-8, UTF-16, ANSI) และแปลงเวลาให้อัตโนมัติ")
+st.title("📈 DAD Time-Series Visualizer (Binary Processing)")
+st.write("อัปโหลดไฟล์ .DAD / .DAT ดิบรวดเดียวหลายไฟล์ ระบบจะอ่านข้อมูลแบบ Binary และพล็อตกราฟแยก 7 หมวดให้อัตโนมัติ")
 
-# --- ฟังก์ชันอ่านไฟล์พร้อมสุ่มทดสอบ Encoding หลายรูปแบบ ---
-def load_df_with_auto_encoding(file, sep):
-    # รวม Encoding ยอดนิยมที่มักพบในไฟล์จากเครื่องมือวัดทางวิทยาศาสตร์
-    encodings = ['utf-16', 'utf-16-le', 'utf-16-be', 'utf-8', 'latin1', 'cp1252', 'cp874']
-    for enc in encodings:
-        try:
-            file.seek(0)
-            df = pd.read_csv(file, sep=sep, encoding=enc, engine='python')
-            if not df.empty and len(df.columns) >= 1:
-                return df, enc
-        except Exception:
-            continue
-    raise ValueError("ไม่สามารถอ่านรหัสข้อความได้ (ไฟล์อาจเป็น Binary เฉพาะทาง)")
+# ==========================================
+# เมนูด้านข้าง (Sidebar) สำหรับตั้งค่าเวลา
+# ==========================================
+st.sidebar.header("⏰ การตั้งค่าเวลา (Time Settings)")
+st.sidebar.caption("ระบุเวลาเริ่มต้นสำหรับไฟล์ที่อัปโหลด")
+start_date = st.sidebar.date_input("วันที่เริ่มต้น (Start Date)", pd.to_datetime("today"))
+start_time = st.sidebar.time_input("เวลาเริ่มต้น (Start Time)", pd.to_datetime("08:00").time())
+sample_rate_sec = st.sidebar.number_input("ความถี่ในการบันทึก (วินาที/จุด)", min_value=0.1, value=1.0, step=0.1)
 
-# --- ฟังก์ชันตรวจจับคอลัมน์ วัน/เวลา อัตโนมัติ ---
-def detect_time_column(df):
-    time_keywords = ['date', 'time', 'datetime', 'timestamp', 'เวลา', 'วันที่', 'dt']
-    
-    for col in df.columns:
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
-            return col
-            
-    for col in df.columns:
-        if any(kw in str(col).lower() for kw in time_keywords):
-            parsed = pd.to_datetime(df[col], errors='coerce')
-            if parsed.notna().sum() > 0.5 * len(df):
-                return col
-                
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            parsed = pd.to_datetime(df[col], errors='coerce')
-            if parsed.notna().sum() > 0.7 * len(df):
-                return col
-                
-    return df.columns[0]
+start_datetime = datetime.combine(start_date, start_time)
 
-# --- Sidebar ตั้งค่าการอ่านไฟล์ ---
-st.sidebar.header("⚙️ ตั้งค่าการอ่านไฟล์")
-delimiter_choice = st.sidebar.selectbox(
-    "ตัวแบ่งข้อมูล (Delimiter)",
-    options=["Space/Tab (อัตโนมัติ)", "Comma (,)", "Tab (\\t)", "Semicolon (;)"],
-    index=0
-)
-sep_map = {
-    "Space/Tab (อัตโนมัติ)": r'\s+',
-    "Comma (,)": ',',
-    "Tab (\\t)": '\t',
-    "Semicolon (;)": ';'
-}
-
-# --- 1. ส่วนอัปโหลดไฟล์ ---
-uploaded_files = st.file_uploader(
-    "เลือกไฟล์ .DAD / .TXT / .CSV",
-    type=["dad", "txt", "dat", "csv"],
-    accept_multiple_files=True
-)
+# ==========================================
+# ส่วนอัปโหลดไฟล์ (รองรับหลายไฟล์)
+# ==========================================
+# ใช้ accept_multiple_files=True เพื่อให้โยนทีละหลายๆ ไฟล์ได้เหมือนในภาพ
+uploaded_files = st.file_uploader("เลือกไฟล์ .DAD / .DAT", type=["dad", "dat"], accept_multiple_files=True)
 
 if uploaded_files:
-    df_list = []
-    
+    # วนลูปประมวลผลทีละไฟล์ที่อัปโหลดเข้ามา
     for file in uploaded_files:
+        st.markdown(f"<h2 style='color:#1E90FF;'>📂 ผลการวิเคราะห์ไฟล์: {file.name}</h2>", unsafe_allow_html=True)
+        
         try:
-            temp_df, used_encoding = load_df_with_auto_encoding(file, sep_map[delimiter_choice])
-            temp_df['Source_File'] = file.name
-            df_list.append(temp_df)
+            # 💡 สำคัญที่สุด: อ่านเป็น Byte ดิบ (ห้ามใช้ Text Decode เด็ดขาด)
+            binary_data = file.read()
+            
+            # ถอดรหัส Binary ข้าม Header 512 bytes (ถ้าเครื่องรุ่นนี้ใช้ int32 ให้เปลี่ยน dtype เป็น np.int32)
+            raw_signals = np.frombuffer(binary_data, dtype=np.int16, offset=512)
+            total_points = len(raw_signals)
+            
+            # จำนวน Channels = 25
+            num_channels = 25  
+            points_per_channel = total_points // num_channels
+            
+            # แปลง Array ให้เป็นรูปตาราง
+            reshaped_data = raw_signals[:points_per_channel * num_channels].reshape(points_per_channel, num_channels)
+            
+            # สร้างชื่อคอลัมน์ 25 ช่อง
+            col_names = []
+            for i in range(1, 8): col_names.append(f"Top{i}")                  # 1-7 (Top)
+            for i in range(1, 8): col_names.append(f"Bottom{i}")               # 8-14 (Bottom)
+            for i in range(1, 3): col_names.append(f"Dryer Zone{i}")           # 15-16 (Dryer)
+            col_names.extend(["N2 Entrance", "N2 Exit"])                       # 17-18 (N2)
+            col_names.extend(["ppm O2 Entrance", "ppm O2 Exit"])               # 19-20 (ppm O2)
+            for i in range(1, 5): col_names.append(f"Debinder Zone{i}")        # 21-24 (Debinder)
+            col_names.append("Dew Point")                                      # 25 (Dew Point)
+            
+            # สร้างแกนเวลา
+            time_freq = f"{int(sample_rate_sec * 1000)}ms"
+            time_axis = pd.date_range(start=start_datetime, periods=points_per_channel, freq=time_freq)
+            
+            # ประกอบข้อมูลเข้าเป็น DataFrame
+            df = pd.DataFrame(reshaped_data, columns=col_names[:num_channels])
+            df.insert(0, "Datetime", time_axis)
+            
+            st.success(f"✅ อ่านไฟล์ {file.name} สำเร็จ! พบข้อมูลทั้งหมด {points_per_channel} ชุดเวลา")
+            
+            # แสดงตัวอย่างตาราง (ซ่อนได้เพื่อให้หน้าเว็บไม่ยาวเกินไป)
+            with st.expander("🔍 ดูตารางข้อมูลดิบ (Data Table)"):
+                st.dataframe(df.head(100)) # แสดง 100 แถวแรก
+            
+            # ฟังก์ชันวาดกราฟสำหรับไฟล์ปัจจุบัน
+            def draw_section_graph(section_title, keywords):
+                selected_cols = [c for c in df.columns if any(k.lower() in c.lower() for k in keywords)]
+                if selected_cols:
+                    fig = px.line(df, x="Datetime", y=selected_cols, title=f"{section_title}", template="plotly_white")
+                    fig.update_yaxes(autorange=True)
+                    fig.update_xaxes(title_text="Date / Time", tickformat="%Y-%m-%d %H:%M:%S")
+                    fig.update_layout(legend_title_text='Signals', margin=dict(l=20, r=20, t=40, b=20), hovermode="x unified")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning(f"ไม่พบข้อมูลสำหรับ: {section_title}")
+            
+            # ==========================================
+            # แสดงกราฟทั้ง 7 โซน
+            # ==========================================
+            st.write("### 📐 1. Top 7 Zones")
+            draw_section_graph("Top Zones Display", ["top"])
+            
+            st.write("### 📐 2. Bottom 7 Zones")
+            draw_section_graph("Bottom Zones Display", ["bottom"])
+            
+            st.write("### 🔥 3. Dryer 2 Zones")
+            draw_section_graph("Dryer Display", ["dryer"])
+            
+            st.write("### 💨 4. N2")
+            draw_section_graph("N2 Flow Display", ["n2"])
+            
+            st.write("### 🧪 5. ppm O2 Entrance & Exit")
+            draw_section_graph("O2 Concentration Display", ["o2"])
+            
+            st.write("### ⚙️ 6. Debinder 4 Zones")
+            draw_section_graph("Debinder Display", ["debinder"])
+
+            st.write("### 💧 7. Dew Point")
+            draw_section_graph("Dew Point Display", ["dew point"])
+            
+            st.divider() # เส้นคั่นระหว่างไฟล์
+
         except Exception as e:
-            st.error(f"ไม่สามารถอ่านไฟล์ **{file.name}**: {e}")
-
-    if df_list:
-        combined_df = pd.concat(df_list, ignore_index=True)
-        all_cols = [c for c in combined_df.columns if c != 'Source_File']
-
-        # --- 2. ค้นหาและกำหนดคอลัมน์เวลาอัตโนมัติ ---
-        detected_col = detect_time_column(combined_df)
-        default_idx = all_cols.index(detected_col) if detected_col in all_cols else 0
-
-        st.subheader("🛠️ ตั้งค่าคอลัมน์")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            time_col = st.selectbox(
-                "คอลัมน์วัน-เวลา (ระบบเลือกให้อัตโนมัติ):",
-                options=all_cols,
-                index=default_idx
-            )
-
-        # แปลงเป็น DateTime และจัดเรียงตามเวลาจริง
-        combined_df[time_col] = pd.to_datetime(combined_df[time_col], errors='coerce')
-        valid_time_df = combined_df.dropna(subset=[time_col]).sort_values(by=time_col).reset_index(drop=True)
-
-        with col2:
-            signal_cols = st.multiselect(
-                "เลือกคอลัมน์ค่าสัญญาณ (Y-Axis):",
-                options=[c for c in all_cols if c != time_col],
-                default=[c for c in all_cols if c != time_col][:1]
-            )
-
-        if not valid_time_df.empty:
-            start_time = valid_time_df[time_col].min().strftime('%Y-%m-%d %H:%M:%S')
-            end_time = valid_time_df[time_col].max().strftime('%Y-%m-%d %H:%M:%S')
-            st.success(f"📌 ช่วงเวลาจริง: **{start_time}** ถึง **{end_time}** (รวม {len(valid_time_df)} จุดข้อมูล)")
-        else:
-            st.error("ไม่สามารถแปลงข้อมูลในคอลัมน์ที่เลือกให้เป็นวัน/เวลาได้ โปรดเลือกคอลัมน์อื่น")
-
-        # --- 3. แสดง Interactive Graph ---
-        if signal_cols and not valid_time_df.empty:
-            st.subheader("📊 Interactive Time-Series Graph")
-
-            fig = px.line(
-                valid_time_df,
-                x=time_col,
-                y=signal_cols,
-                color='Source_File' if len(signal_cols) == 1 else None,
-                title="กราฟแสดงค่าสัญญาณตามลำดับเวลาจริง",
-                labels={time_col: "วัน-เวลา", "value": "ค่าสัญญาณ"}
-            )
-
-            fig.update_layout(
-                hovermode="x unified",
-                height=600,
-                xaxis=dict(
-                    type="date",
-                    rangeslider=dict(visible=True)
-                )
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-        # --- 4. ปุ่มดาวน์โหลดข้อมูล ---
-        with st.expander("📄 ตารางข้อมูลที่รวมและเรียงตามเวลาแล้ว"):
-            st.dataframe(valid_time_df)
-            csv_data = valid_time_df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="ดาวน์โหลด Combined CSV",
-                data=csv_data,
-                file_name="combined_time_data.csv",
-                mime="text/csv"
-            )
+            st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผลไฟล์ {file.name}: {e}")
+            st.info("💡 ข้อแนะนำ: ตรวจสอบว่าไฟล์นี้ถูกบันทึกด้วยโครงสร้าง 25 ช่องสัญญาณหรือไม่ หรือลองเปลี่ยน `dtype=np.int16` เป็น `dtype=np.float32` หรือ `np.int32` ในบรรทัด np.frombuffer")
