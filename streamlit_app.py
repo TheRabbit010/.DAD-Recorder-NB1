@@ -2,35 +2,46 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="DAD Auto Time-Series Plotter", layout="wide", page_icon="📈")
+st.set_page_config(page_title="DAD Time-Series Visualizer", layout="wide", page_icon="📈")
 
-st.title("📈 DAD Time-Series Visualizer (Auto-Detect Time)")
-st.write("อัปโหลดไฟล์ `.DAD` ระบบจะค้นหาและแปลงคอลัมน์วัน/เวลาให้อัตโนมัติ พร้อมแสดงกราฟตามลำดับเวลาจริง")
+st.title("📈 DAD Time-Series Visualizer (Auto Encoding & Time)")
+st.write("อัปโหลดไฟล์ `.DAD` โดยระบบจะตรวจจับตัวถอดรหัสภาษา (UTF-8, UTF-16, ANSI) และแปลงเวลาให้อัตโนมัติ")
+
+# --- ฟังก์ชันอ่านไฟล์พร้อมสุ่มทดสอบ Encoding หลายรูปแบบ ---
+def load_df_with_auto_encoding(file, sep):
+    # รวม Encoding ยอดนิยมที่มักพบในไฟล์จากเครื่องมือวัดทางวิทยาศาสตร์
+    encodings = ['utf-16', 'utf-16-le', 'utf-16-be', 'utf-8', 'latin1', 'cp1252', 'cp874']
+    for enc in encodings:
+        try:
+            file.seek(0)
+            df = pd.read_csv(file, sep=sep, encoding=enc, engine='python')
+            if not df.empty and len(df.columns) >= 1:
+                return df, enc
+        except Exception:
+            continue
+    raise ValueError("ไม่สามารถอ่านรหัสข้อความได้ (ไฟล์อาจเป็น Binary เฉพาะทาง)")
 
 # --- ฟังก์ชันตรวจจับคอลัมน์ วัน/เวลา อัตโนมัติ ---
 def detect_time_column(df):
     time_keywords = ['date', 'time', 'datetime', 'timestamp', 'เวลา', 'วันที่', 'dt']
     
-    # 1. ตรวจสอบคอลัมน์ที่เป็นประเภท datetime อยู่แล้ว
     for col in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             return col
             
-    # 2. ค้นหาจากชื่อคอลัมน์ที่มีคำระบุเวลา
     for col in df.columns:
         if any(kw in str(col).lower() for kw in time_keywords):
             parsed = pd.to_datetime(df[col], errors='coerce')
-            if parsed.notna().sum() > 0.5 * len(df): # สามารถแปลงเป็นเวลาได้มากกว่า 50%
+            if parsed.notna().sum() > 0.5 * len(df):
                 return col
                 
-    # 3. สุ่มสแกนคอลัมน์ที่เป็นข้อความเพื่อทดลองแปลงเป็นเวลา
     for col in df.columns:
         if df[col].dtype == 'object':
             parsed = pd.to_datetime(df[col], errors='coerce')
             if parsed.notna().sum() > 0.7 * len(df):
                 return col
                 
-    return df.columns[0]  # Fallback เลือกคอลัมน์แรกหากไม่พบ
+    return df.columns[0]
 
 # --- Sidebar ตั้งค่าการอ่านไฟล์ ---
 st.sidebar.header("⚙️ ตั้งค่าการอ่านไฟล์")
@@ -48,7 +59,7 @@ sep_map = {
 
 # --- 1. ส่วนอัปโหลดไฟล์ ---
 uploaded_files = st.file_uploader(
-    "เลือกไฟล์ .DAD / .TXT / .CSV (เลือกหลายไฟล์พร้อมกันได้)",
+    "เลือกไฟล์ .DAD / .TXT / .CSV",
     type=["dad", "txt", "dat", "csv"],
     accept_multiple_files=True
 )
@@ -58,7 +69,7 @@ if uploaded_files:
     
     for file in uploaded_files:
         try:
-            temp_df = pd.read_csv(file, sep=sep_map[delimiter_choice], engine='python')
+            temp_df, used_encoding = load_df_with_auto_encoding(file, sep_map[delimiter_choice])
             temp_df['Source_File'] = file.name
             df_list.append(temp_df)
         except Exception as e:
@@ -72,7 +83,7 @@ if uploaded_files:
         detected_col = detect_time_column(combined_df)
         default_idx = all_cols.index(detected_col) if detected_col in all_cols else 0
 
-        st.subheader("🛠️ การเลือกคอลัมน์ (ระบุอัตโนมัติ)")
+        st.subheader("🛠️ ตั้งค่าคอลัมน์")
         col1, col2 = st.columns(2)
 
         with col1:
@@ -82,10 +93,8 @@ if uploaded_files:
                 index=default_idx
             )
 
-        # แปลงคอลัมน์ที่เลือกให้เป็น DateTime จริง และเรียงลำดับเวลา
+        # แปลงเป็น DateTime และจัดเรียงตามเวลาจริง
         combined_df[time_col] = pd.to_datetime(combined_df[time_col], errors='coerce')
-        
-        # ตัดข้อมูลที่ไม่สามารถแปลงเป็นเวลาได้ออก และเรียงลำดับตามเวลาจริง
         valid_time_df = combined_df.dropna(subset=[time_col]).sort_values(by=time_col).reset_index(drop=True)
 
         with col2:
@@ -98,7 +107,7 @@ if uploaded_files:
         if not valid_time_df.empty:
             start_time = valid_time_df[time_col].min().strftime('%Y-%m-%d %H:%M:%S')
             end_time = valid_time_df[time_col].max().strftime('%Y-%m-%d %H:%M:%S')
-            st.success(f"📌 ตรวจพบช่วงเวลาจริง: **{start_time}** ถึง **{end_time}** (รวม {len(valid_time_df)} จุดข้อมูล)")
+            st.success(f"📌 ช่วงเวลาจริง: **{start_time}** ถึง **{end_time}** (รวม {len(valid_time_df)} จุดข้อมูล)")
         else:
             st.error("ไม่สามารถแปลงข้อมูลในคอลัมน์ที่เลือกให้เป็นวัน/เวลาได้ โปรดเลือกคอลัมน์อื่น")
 
