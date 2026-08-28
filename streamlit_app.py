@@ -6,52 +6,56 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 
-# 1. ตั้งค่าหน้าจอแบบกว้าง
+# 1. ตั้งค่าหน้าจอ
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
 
 st.title("📊 DAD Time-Series Visualizer")
 
 # ==========================================
-# แถบตั้งค่าด้านข้าง (Sidebar)
+# แถบตั้งค่าด้านข้าง (Sidebar) - คงไว้เฉพาะปุ่ม Max / Min
 # ==========================================
-st.sidebar.header("⏰ การตั้งค่าเวลาสำรอง (Fallback Time)")
-start_date = st.sidebar.date_input("วันที่เริ่มต้น", pd.to_datetime("today"))
-start_time = st.sidebar.time_input("เวลาเริ่มต้น", pd.to_datetime("08:00").time())
-fallback_start_datetime = datetime.combine(start_date, start_time)
-
-st.sidebar.divider()
-st.sidebar.header("⚙️ แสดงผล (Display Options)")
+st.sidebar.header("⚙️ การแสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้างถอดรหัสและ Mapping สัญญาณจริง (Yokogawa .DAD - 20 Channels)
+# โครงสร้างถอดรหัสและ Mapping สัญญาณจริง (Yokogawa .DAD)
 # ==========================================
 HEADER_OFFSET = 512
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"  # Big-Endian Signed Int16
+STRIDE = 90        # ระยะก้าวจำนวนคอลัมน์จริงต่อ 1 จุดเวลา
+
+col_mapping = {
+    1: 4,   # CH01 -> Z#1 Top
+    2: 6,   # CH02 -> Z#2 Top
+    3: 8,   # CH03 -> Z#3 Top
+    4: 10,  # CH04 -> Z#4 Top
+    5: 12,  # CH05 -> Z#5 Top
+    6: 14,  # CH06 -> Z#6 Top
+    7: 16,  # CH07 -> Z#7 Top
+    8: 18,  # CH08 -> Z#1 Bottom
+    9: 20,  # CH09 -> Z#2 Bottom
+    10: 22, # CH10 -> Z#3 Bottom
+    11: 24, # CH11 -> Z#4 Bottom
+    12: 26, # CH12 -> Z#5 Bottom
+    13: 28, # CH13 -> Z#6 Bottom
+    14: 30, # CH14 -> Z#7 Bottom
+    15: 32, # CH15 -> O2 Exit
+    16: 36, # CH16 -> Dryer #1
+    17: 38, # CH17 -> Dryer #2
+    18: 84, # CH18 -> N2 Flow
+    19: 88, # CH19 -> O2 Entrance
+    20: 86, # CH20 -> Dew Point
+}
 
 ch_info = {
-    1: "Z#1 Top",
-    2: "Z#2 Top",
-    3: "Z#3 Top",
-    4: "Z#4 Top",
-    5: "Z#5 Top",
-    6: "Z#6 Top",
-    7: "Z#7 Top",
-    8: "Z#1 Bottom",
-    9: "Z#2 Bottom",
-    10: "Z#3 Bottom",
-    11: "Z#4 Bottom",
-    12: "Z#5 Bottom",
-    13: "Z#6 Bottom",
-    14: "Z#7 Bottom",
-    15: "O2 Exit",
-    16: "Dryer #1",
-    17: "Dryer #2",
-    18: "N2 Flow",
-    19: "O2 Entrance",
-    20: "Dew Point"
+    1: "Z#1 Top", 2: "Z#2 Top", 3: "Z#3 Top", 4: "Z#4 Top",
+    5: "Z#5 Top", 6: "Z#6 Top", 7: "Z#7 Top",
+    8: "Z#1 Bottom", 9: "Z#2 Bottom", 10: "Z#3 Bottom", 11: "Z#4 Bottom",
+    12: "Z#5 Bottom", 13: "Z#6 Bottom", 14: "Z#7 Bottom",
+    15: "O2 Exit", 16: "Dryer #1", 17: "Dryer #2", 18: "N2 Flow",
+    19: "O2 Entrance", 20: "Dew Point"
 }
 
 top_names = [ch_info[i] for i in range(1, 8)]
@@ -59,7 +63,6 @@ bot_names = [ch_info[i] for i in range(8, 15)]
 col_names = [ch_info[i] for i in range(1, 21)]
 num_channels = len(col_names)
 
-# สีเส้นสัญญาณตามลำดับเพื่อความสวยงามและมองเห็นชัดเจนบนพื้นขาว
 COLOR_PALETTE = [
     "#8e44ad", "#2980b9", "#27ae60", "#d35400", 
     "#f39c12", "#c0392b", "#16a085", "#8e44ad", 
@@ -80,13 +83,14 @@ def extract_datetime_from_filename(filename, default_dt):
     return default_dt, False
 
 # ==========================================
-# อัปโหลดและประมวลผลไฟล์
+# อัปโหลดไฟล์เฉพาะ .DAD เท่านั้น
 # ==========================================
-uploaded_files = st.file_uploader("เลือกไฟล์ .DAD / .DAT", type=["dad", "dat"], accept_multiple_files=True)
+uploaded_files = st.file_uploader("เลือกไฟล์ .DAD", type=["dad", "DAD"], accept_multiple_files=True)
 
 if uploaded_files:
     sorted_files = sorted(uploaded_files, key=lambda x: x.name)
     file_info_list = []
+    fallback_dt = pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
 
     for file in sorted_files:
         try:
@@ -94,16 +98,20 @@ if uploaded_files:
             raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
             scaled_signals = raw_signals / SCALE_DIVIDER
 
-            # 💡 อ่านข้อมูลแบบ 20 แชนเนลต่อเนื่อง ป้องกันปัญหากราฟฟันปลา
-            points_per_channel = len(scaled_signals) // num_channels
-            reshaped_data = scaled_signals[:points_per_channel * num_channels].reshape(points_per_channel, num_channels)
+            total_rows = len(scaled_signals) // STRIDE
+            reshaped_full = scaled_signals[:total_rows * STRIDE].reshape(total_rows, STRIDE)
 
-            start_dt, has_auto_dt = extract_datetime_from_filename(file.name, fallback_start_datetime)
+            extracted_data = np.zeros((total_rows, num_channels))
+            for ch_idx, col_idx in col_mapping.items():
+                if col_idx < STRIDE:
+                    extracted_data[:, ch_idx - 1] = reshaped_full[:, col_idx]
+
+            start_dt, has_auto_dt = extract_datetime_from_filename(file.name, fallback_dt)
 
             file_info_list.append({
                 "file_name": file.name,
-                "data": reshaped_data,
-                "total_rows": points_per_channel,
+                "data": extracted_data,
+                "total_rows": total_rows,
                 "start_datetime": start_dt,
                 "has_auto_dt": has_auto_dt
             })
@@ -112,12 +120,11 @@ if uploaded_files:
 
     if file_info_list:
         all_dfs = []
-        current_time_cursor = fallback_start_datetime
+        current_time_cursor = fallback_dt
 
         for i, info in enumerate(file_info_list):
             total_rows = info["total_rows"]
             
-            # คำนวณความถี่การบันทึกอัตโนมัติ
             if i < len(file_info_list) - 1 and info["has_auto_dt"] and file_info_list[i+1]["has_auto_dt"]:
                 delta_sec = (file_info_list[i+1]["start_datetime"] - info["start_datetime"]).total_seconds()
                 auto_sample_rate = delta_sec / total_rows if total_rows > 0 else 1.0
@@ -126,9 +133,9 @@ if uploaded_files:
                 auto_sample_rate = 1.0
                 file_start_time = info["start_datetime"] if info["has_auto_dt"] else current_time_cursor
 
-            time_freq = f"{int(auto_sample_rate * 1000)}ms"
+            time_freq = f"{max(1, int(auto_sample_rate * 1000))}ms"
             time_axis = pd.date_range(start=file_start_time, periods=total_rows, freq=time_freq)
-            current_time_cursor = time_axis[-1] + pd.Timedelta(milliseconds=int(auto_sample_rate * 1000))
+            current_time_cursor = time_axis[-1] + pd.Timedelta(milliseconds=max(1, int(auto_sample_rate * 1000)))
 
             df_single = pd.DataFrame(info["data"], columns=col_names)
             df_single.insert(0, "Datetime", time_axis)
@@ -138,12 +145,28 @@ if uploaded_files:
         full_df = full_df.sort_values(by="Datetime").reset_index(drop=True)
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
+        # 💡 กรองค่าผิดปกติ/Spikes ดิบทิ้ง แล้วทำการประมาณค่าเชื่อมต่อจุด (ทำเส้นกราฟราบเรียบ)
+        for col in top_names + bot_names:
+            full_df.loc[(full_df[col] < 200) | (full_df[col] > 1000), col] = np.nan
+            full_df[col] = full_df[col].interpolate(method="linear").ffill().bfill()
+
+        for col in ["Dryer #1", "Dryer #2"]:
+            full_df.loc[(full_df[col] < -50) | (full_df[col] > 800), col] = np.nan
+            full_df[col] = full_df[col].interpolate(method="linear").ffill().bfill()
+
+        for col in ["O2 Exit", "O2 Entrance"]:
+            full_df.loc[(full_df[col] < 0) | (full_df[col] > 5000), col] = np.nan
+            full_df[col] = full_df[col].interpolate(method="linear").ffill().bfill()
+
+        full_df.loc[(full_df["Dew Point"] < -120) | (full_df["Dew Point"] > 50), "Dew Point"] = np.nan
+        full_df["Dew Point"] = full_df["Dew Point"].interpolate(method="linear").ffill().bfill()
+
         num_files_str = f"({len(sorted_files)} Files)"
 
         with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
-        # ฟังก์ชันกำหนดสไตล์กราฟพื้นหลังสีขาว
+        # สไตล์พื้นหลังสีขาว
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
             fig.update_layout(
                 height=380,
@@ -230,7 +253,6 @@ if uploaded_files:
         # ==========================================
         st.subheader(f"🔥 Dryer Temperatures Timeline {num_files_str}")
         fig_dryer = make_subplots(specs=[[{"secondary_y": False}]])
-
         fig_dryer.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["Dryer #1"], name="Dryer #1",
             line=dict(color="#2ecc71", width=2.0),
@@ -241,7 +263,6 @@ if uploaded_files:
             line=dict(color="#e67e22", width=2.0),
             hovertemplate="Dryer #2: %{y:.1f} °C<extra></extra>"
         ))
-
         add_max_min_markers(fig_dryer, full_df, ["Dryer #1", "Dryer #2"])
         apply_white_theme_style(fig_dryer, "Temperature [°C]", y_range=[0, 400])
         st.plotly_chart(fig_dryer, use_container_width=True)
@@ -251,25 +272,21 @@ if uploaded_files:
         # ==========================================
         st.subheader(f"🧪 Oxygen Concentration & N2 Flow Timeline {num_files_str}")
         fig_o2_n2 = make_subplots(specs=[[{"secondary_y": True}]])
-
         fig_o2_n2.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["O2 Exit"], name="O2 Exit",
             line=dict(color="#e74c3c", width=2.0),
             hovertemplate="O2 Exit: %{y:.1f} ppm<extra></extra>"
         ), secondary_y=False)
-
         fig_o2_n2.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["O2 Entrance"], name="O2 Entrance",
             line=dict(color="#3498db", width=2.0),
             hovertemplate="O2 Entrance: %{y:.1f} ppm<extra></extra>"
         ), secondary_y=False)
-
         fig_o2_n2.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["N2 Flow"], name="N2 Flow",
             line=dict(color="#2ecc71", width=1.5, dash="dash"),
             hovertemplate="N2 Flow: %{y:.1f}<extra></extra>"
         ), secondary_y=True)
-
         add_max_min_markers(fig_o2_n2, full_df, ["O2 Exit", "O2 Entrance", "N2 Flow"], secondary_y_cols=["N2 Flow"])
         apply_white_theme_style(fig_o2_n2, "O2 Level [ppm]", y_range=[0, 200])
         fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True, showgrid=False)
@@ -280,13 +297,11 @@ if uploaded_files:
         # ==========================================
         st.subheader(f"💧 Dew Point Timeline {num_files_str}")
         fig_dew = make_subplots(specs=[[{"secondary_y": False}]])
-
         fig_dew.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["Dew Point"], name="Dew Point",
             line=dict(color="#9b59b6", width=2.0),
             hovertemplate="Dew Point: %{y:.1f} °Cdp<extra></extra>"
         ))
-
         add_max_min_markers(fig_dew, full_df, ["Dew Point"])
         apply_white_theme_style(fig_dew, "Dew Point [°Cdp]", y_range=[-100, 10])
         st.plotly_chart(fig_dew, use_container_width=True)
