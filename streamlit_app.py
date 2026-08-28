@@ -6,48 +6,39 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 
-# 1. ตั้งค่าหน้าจอ
+# 1. ตั้งค่าหน้าจอแบบกว้าง
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
 
 st.title("📊 DAD Time-Series Visualizer")
 
 # ==========================================
-# แถบตั้งค่าด้านข้าง (Sidebar) - คงไว้เฉพาะปุ่ม Max / Min
+# แถบตั้งค่าด้านข้าง (Sidebar)
 # ==========================================
+st.sidebar.header("⏰ ตั้งค่าเวลาสำรอง (กรณีชื่อไฟล์ไม่มีเวลา)")
+start_date = st.sidebar.date_input("วันที่เริ่มต้น", pd.to_datetime("today"))
+start_time = st.sidebar.time_input("เวลาเริ่มต้น", pd.to_datetime("08:00").time())
+fallback_start_datetime = datetime.combine(start_date, start_time)
+
+st.sidebar.divider()
+st.sidebar.header("🔧 ปรับแต่งโครงสร้างไฟล์ (Binary Format)")
+array_order = st.sidebar.selectbox(
+    "การจัดเรียง Array สัญญาณ",
+    ["Fortran Order (Channel-Sequential) - แนะนำ", "C-Order (Interleaved)"],
+    index=0,
+    help="หากกราฟเกิดลายฟันปลาขึ้นลงรุนแรง ให้เลือก Fortran Order"
+)
+
+st.sidebar.divider()
 st.sidebar.header("⚙️ การแสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้างถอดรหัสและ Mapping สัญญาณจริง (Yokogawa .DAD)
+# โครงสร้างถอดรหัส Yokogawa .DAD 20 Channels
 # ==========================================
 HEADER_OFFSET = 512
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"  # Big-Endian Signed Int16
-STRIDE = 90        # ระยะก้าวจำนวนคอลัมน์จริงต่อ 1 จุดเวลา
-
-col_mapping = {
-    1: 4,   # CH01 -> Z#1 Top
-    2: 6,   # CH02 -> Z#2 Top
-    3: 8,   # CH03 -> Z#3 Top
-    4: 10,  # CH04 -> Z#4 Top
-    5: 12,  # CH05 -> Z#5 Top
-    6: 14,  # CH06 -> Z#6 Top
-    7: 16,  # CH07 -> Z#7 Top
-    8: 18,  # CH08 -> Z#1 Bottom
-    9: 20,  # CH09 -> Z#2 Bottom
-    10: 22, # CH10 -> Z#3 Bottom
-    11: 24, # CH11 -> Z#4 Bottom
-    12: 26, # CH12 -> Z#5 Bottom
-    13: 28, # CH13 -> Z#6 Bottom
-    14: 30, # CH14 -> Z#7 Bottom
-    15: 32, # CH15 -> O2 Exit
-    16: 36, # CH16 -> Dryer #1
-    17: 38, # CH17 -> Dryer #2
-    18: 84, # CH18 -> N2 Flow
-    19: 88, # CH19 -> O2 Entrance
-    20: 86, # CH20 -> Dew Point
-}
 
 ch_info = {
     1: "Z#1 Top", 2: "Z#2 Top", 3: "Z#3 Top", 4: "Z#4 Top",
@@ -71,11 +62,21 @@ COLOR_PALETTE = [
     "#e67e22", "#1abc9c", "#3498db", "#9b59b6"
 ]
 
+# ฟังก์ชันถอดรหัส Date & Time จากชื่อไฟล์จริง (เช่น ..._DATA260825_160000.DAD)
 def extract_datetime_from_filename(filename, default_dt):
+    # ค้นหาแพทเทิร์นตัวเลข 6 ตัว สองชุด เช่น 260825_160000
     match = re.search(r'(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})', filename)
     if match:
-        yy, mm, dd, hh, min_s, ss = map(int, match.groups())
-        year = 2000 + yy
+        p1, p2, p3, hh, min_s, ss = map(int, match.groups())
+        
+        # ตรวจสอบรูปแบบ YYMMDD หรือ DDMMYY
+        if p1 == 26 or p1 == 25: # กรณี YYMMDD (ปี 2026/2025)
+            year, mm, dd = 2000 + p1, p2, p3
+        elif p3 == 26 or p3 == 25: # กรณี DDMMYY
+            dd, mm, year = p1, p2, 2000 + p3
+        else:
+            year, mm, dd = 2000 + p1, p2, p3
+
         try:
             return datetime(year, mm, dd, hh, min_s, ss), True
         except ValueError:
@@ -83,14 +84,13 @@ def extract_datetime_from_filename(filename, default_dt):
     return default_dt, False
 
 # ==========================================
-# อัปโหลดไฟล์เฉพาะ .DAD เท่านั้น
+# อัปโหลดไฟล์ .DAD
 # ==========================================
 uploaded_files = st.file_uploader("เลือกไฟล์ .DAD", type=["dad", "DAD"], accept_multiple_files=True)
 
 if uploaded_files:
     sorted_files = sorted(uploaded_files, key=lambda x: x.name)
     file_info_list = []
-    fallback_dt = pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
 
     for file in sorted_files:
         try:
@@ -98,20 +98,19 @@ if uploaded_files:
             raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
             scaled_signals = raw_signals / SCALE_DIVIDER
 
-            total_rows = len(scaled_signals) // STRIDE
-            reshaped_full = scaled_signals[:total_rows * STRIDE].reshape(total_rows, STRIDE)
+            points_per_channel = len(scaled_signals) // num_channels
+            usable_points = points_per_channel * num_channels
+            
+            # 💡 แก้อาการฟันปลา: ใช้ order='F' (Fortran-order) เพื่อเรียงข้อมูลต่อกันทีละช่องสัญญาณ
+            order_code = 'F' if "Fortran" in array_order else 'C'
+            reshaped_data = scaled_signals[:usable_points].reshape((points_per_channel, num_channels), order=order_code)
 
-            extracted_data = np.zeros((total_rows, num_channels))
-            for ch_idx, col_idx in col_mapping.items():
-                if col_idx < STRIDE:
-                    extracted_data[:, ch_idx - 1] = reshaped_full[:, col_idx]
-
-            start_dt, has_auto_dt = extract_datetime_from_filename(file.name, fallback_dt)
+            start_dt, has_auto_dt = extract_datetime_from_filename(file.name, fallback_start_datetime)
 
             file_info_list.append({
                 "file_name": file.name,
-                "data": extracted_data,
-                "total_rows": total_rows,
+                "data": reshaped_data,
+                "total_rows": points_per_channel,
                 "start_datetime": start_dt,
                 "has_auto_dt": has_auto_dt
             })
@@ -120,11 +119,12 @@ if uploaded_files:
 
     if file_info_list:
         all_dfs = []
-        current_time_cursor = fallback_dt
+        current_time_cursor = fallback_start_datetime
 
         for i, info in enumerate(file_info_list):
             total_rows = info["total_rows"]
             
+            # คำนวณแกนเวลาต่อเนื่องจากไฟล์จริง
             if i < len(file_info_list) - 1 and info["has_auto_dt"] and file_info_list[i+1]["has_auto_dt"]:
                 delta_sec = (file_info_list[i+1]["start_datetime"] - info["start_datetime"]).total_seconds()
                 auto_sample_rate = delta_sec / total_rows if total_rows > 0 else 1.0
@@ -145,31 +145,15 @@ if uploaded_files:
         full_df = full_df.sort_values(by="Datetime").reset_index(drop=True)
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
-        # 💡 กรองค่าผิดปกติ/Spikes ดิบทิ้ง แล้วทำการประมาณค่าเชื่อมต่อจุด (ทำเส้นกราฟราบเรียบ)
-        for col in top_names + bot_names:
-            full_df.loc[(full_df[col] < 200) | (full_df[col] > 1000), col] = np.nan
-            full_df[col] = full_df[col].interpolate(method="linear").ffill().bfill()
-
-        for col in ["Dryer #1", "Dryer #2"]:
-            full_df.loc[(full_df[col] < -50) | (full_df[col] > 800), col] = np.nan
-            full_df[col] = full_df[col].interpolate(method="linear").ffill().bfill()
-
-        for col in ["O2 Exit", "O2 Entrance"]:
-            full_df.loc[(full_df[col] < 0) | (full_df[col] > 5000), col] = np.nan
-            full_df[col] = full_df[col].interpolate(method="linear").ffill().bfill()
-
-        full_df.loc[(full_df["Dew Point"] < -120) | (full_df["Dew Point"] > 50), "Dew Point"] = np.nan
-        full_df["Dew Point"] = full_df["Dew Point"].interpolate(method="linear").ffill().bfill()
-
         num_files_str = f"({len(sorted_files)} Files)"
 
         with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
-        # สไตล์พื้นหลังสีขาว
+        # สไตล์พื้นหลังสีขาว ฟอร์แมตเวลาเหมือนรูปตัวอย่าง image_7b303c.png
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
             fig.update_layout(
-                height=380,
+                height=400,
                 template="plotly_white",
                 paper_bgcolor="white",
                 plot_bgcolor="white",
@@ -183,15 +167,15 @@ if uploaded_files:
             )
             fig.update_xaxes(
                 title_text="Date & Time",
-                tickformat="%H:%M:%S\n%b %d, %Y",
+                tickformat="%d/%m\n%H:%M", # แสดงผล วัน/เดือน เวลา เหมือนรูปตัวอย่าง
                 showgrid=True,
-                gridcolor="#E0E0E0",
+                gridcolor="#E5E5E5",
                 gridwidth=1
             )
             fig.update_yaxes(
                 title_text=y_title,
                 showgrid=True,
-                gridcolor="#E0E0E0",
+                gridcolor="#E5E5E5",
                 gridwidth=1,
                 range=y_range if y_range else None,
                 autorange=True if not y_range else False,
