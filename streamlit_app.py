@@ -20,13 +20,48 @@ sample_rate_sec = st.sidebar.number_input("ความถี่ในการ�
 current_start_datetime = datetime.combine(start_date, start_time)
 
 st.sidebar.divider()
-st.sidebar.header("🔧 การถอดรหัสไฟล์ (Header Settings)")
+st.sidebar.header("🔧 การถอดรหัสไฟล์ (Binary Decoder)")
+endian_option = st.sidebar.selectbox("ระบบลำดับไบต์ (Byte Order)", ["Big-Endian (>i2) - Yokogawa", "Little-Endian (<i2)"], index=0)
+scale_divider = st.sidebar.number_input("ตัวหารปรับสเกลค่า (Divider)", value=10.0, step=1.0, help="เช่น 6141 / 10.0 = 614.1 °C")
 header_offset = st.sidebar.number_input("Header Offset (Bytes)", value=512, step=64)
 
 st.sidebar.divider()
 st.sidebar.header("⚙️ แสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
+
+dtype_str = ">i2" if "Big-Endian" in endian_option else "<i2"
+
+# ==========================================
+# การกำหนด Mapping สัญญาณตาม ch_info (20 Channels)
+# ==========================================
+ch_info = {
+    1: "Z#1 Top",
+    2: "Z#2 Top",
+    3: "Z#3 Top",
+    4: "Z#4 Top",
+    5: "Z#5 Top",
+    6: "Z#6 Top",
+    7: "Z#7 Top",
+    8: "Z#1 Bottom",
+    9: "Z#2 Bottom",
+    10: "Z#3 Bottom",
+    11: "Z#4 Bottom",
+    12: "Z#5 Bottom",
+    13: "Z#6 Bottom",
+    14: "Z#7 Bottom",
+    15: "O2 Exit",
+    16: "Dryer #1",
+    17: "Dryer #2",
+    18: "N2 Flow",
+    19: "O2 Entrance",
+    20: "Dew Point"
+}
+
+top_names = [ch_info[i] for i in range(1, 8)]
+bot_names = [ch_info[i] for i in range(8, 15)]
+col_names = [ch_info[i] for i in range(1, 21)]
+num_channels = len(col_names)
 
 # ==========================================
 # อัปโหลดและประมวลผลไฟล์
@@ -36,22 +71,18 @@ uploaded_files = st.file_uploader("เลือกไฟล์ .DAD / .DAT", typ
 if uploaded_files:
     sorted_files = sorted(uploaded_files, key=lambda x: x.name)
     all_dfs = []
-    
-    # โครงสร้างแชนเนลสัญญาณ
-    top_names = [f"Top{i} (Z{i})" for i in range(1, 8)]
-    bot_names = [f"Bot{i} (Z{i+7})" for i in range(1, 8)]
-    col_names = top_names + bot_names + ["O2 Exit", "Dryer #1", "Dryer #2", "N2 Flow", "O2 Entrance", "Dew Point"]
-    num_channels = len(col_names)
 
     for file in sorted_files:
         try:
             binary_data = file.read()
-            raw_signals = np.frombuffer(binary_data, dtype=np.int16, offset=int(header_offset)).astype(float)
+            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(dtype_str), offset=int(header_offset)).astype(float)
+            
+            if scale_divider != 0:
+                raw_signals = raw_signals / scale_divider
 
             points_per_channel = len(raw_signals) // num_channels
             reshaped_data = raw_signals[:points_per_channel * num_channels].reshape(points_per_channel, num_channels)
 
-            # คำนวณแกนเวลาต่อเนื่องระหว่างไฟล์
             time_freq = f"{int(sample_rate_sec * 1000)}ms"
             time_axis = pd.date_range(start=current_start_datetime, periods=points_per_channel, freq=time_freq)
             
@@ -94,7 +125,7 @@ if uploaded_files:
         # ==========================================
         # 1. Top Zones Timeline (Scale: 400 - 650 °C)
         # ==========================================
-        st.subheader(f"📐 Top Zones 1-7 Timeline {num_files_str}")
+        st.subheader(f"📐 Top Zones Timeline {num_files_str}")
         fig_top = make_subplots(specs=[[{"secondary_y": False}]])
         for col in top_names:
             fig_top.add_trace(go.Scatter(
@@ -114,7 +145,7 @@ if uploaded_files:
         # ==========================================
         # 2. Bottom Zones Timeline (Scale: 400 - 650 °C)
         # ==========================================
-        st.subheader(f"📐 Bottom Zones 1-7 Timeline {num_files_str}")
+        st.subheader(f"📐 Bottom Zones Timeline {num_files_str}")
         fig_bot = make_subplots(specs=[[{"secondary_y": False}]])
         for col in bot_names:
             fig_bot.add_trace(go.Scatter(
@@ -161,7 +192,6 @@ if uploaded_files:
 
         # ==========================================
         # 4. Oxygen Concentration & N2 Flow Timeline
-        #    (O2 Scale: 0 - 200 ppm, N2: Free Scale)
         # ==========================================
         st.subheader(f"🧪 Oxygen Concentration & N2 Flow Timeline {num_files_str}")
         fig_o2_n2 = make_subplots(specs=[[{"secondary_y": True}]])
