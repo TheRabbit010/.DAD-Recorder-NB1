@@ -21,15 +21,6 @@ current_start_datetime = datetime.combine(start_date, start_time)
 
 st.sidebar.divider()
 st.sidebar.header("⚙️ แสดงผล (Display Options)")
-
-# ตัวเลือกการคำนวณเส้นเดี่ยวประจำโซน
-line_calc_mode = st.sidebar.selectbox(
-    "รูปแบบเส้นสัญญาณประจำโซน",
-    ["Average (ค่าเฉลี่ย)", "Maximum (ค่าสูงสุด)", "Minimum (ค่าต่ำสุด)"],
-    index=0
-)
-
-# ปุ่มแสดงจุด Max / Min บนเส้นกราฟ
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
@@ -106,117 +97,158 @@ if uploaded_files:
     if all_dfs:
         full_df = pd.concat(all_dfs, ignore_index=True)
 
-        # ตัดเวลาที่ซ้ำกันออกและเรียงลำดับเวลา
+        # 💡 จัดการตัดเวลาที่ซ้ำกันออกและเรียงลำดับเวลาให้ถูกต้องแม่นยำ
         full_df = full_df.sort_values(by="Datetime")
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
         num_files_str = f"({len(sorted_files)} Files)"
 
-        # คำนวณรวบยอดให้เหลือเพียง 1 เส้นต่อ 1 กลุ่มกราฟ ตามตัวเลือกจาก Sidebar
-        if "Average" in line_calc_mode:
-            full_df["Top_Single"] = full_df[top_names].mean(axis=1)
-            full_df["Bot_Single"] = full_df[bot_names].mean(axis=1)
-            full_df["Dryer_Single"] = full_df[["Dryer #1", "Dryer #2"]].mean(axis=1)
-            full_df["O2_Single"] = full_df[["O2 Exit", "O2 Entrance"]].mean(axis=1)
-            mode_label = "Avg"
-        elif "Maximum" in line_calc_mode:
-            full_df["Top_Single"] = full_df[top_names].max(axis=1)
-            full_df["Bot_Single"] = full_df[bot_names].max(axis=1)
-            full_df["Dryer_Single"] = full_df[["Dryer #1", "Dryer #2"]].max(axis=1)
-            full_df["O2_Single"] = full_df[["O2 Exit", "O2 Entrance"]].max(axis=1)
-            mode_label = "Max"
-        else:
-            full_df["Top_Single"] = full_df[top_names].min(axis=1)
-            full_df["Bot_Single"] = full_df[bot_names].min(axis=1)
-            full_df["Dryer_Single"] = full_df[["Dryer #1", "Dryer #2"]].min(axis=1)
-            full_df["O2_Single"] = full_df[["O2 Exit", "O2 Entrance"]].min(axis=1)
-            mode_label = "Min"
-
         with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
-        # ฟังก์ชันวาดกราฟแบบ 1 เส้นเดี่ยวต่อ 1 กราฟ
-        def create_single_line_plot(y_col, y_title, y_range=None, unit="°C", color="#1f77b4"):
-            fig = make_subplots(specs=[[{"secondary_y": False}]])
-            
-            fig.add_trace(go.Scatter(
-                x=full_df["Datetime"], y=full_df[y_col], name=f"{y_title} ({mode_label})",
-                line=dict(color=color, width=1.8),
-                hovertemplate=f"<b>{y_title}</b>: %{{y:.1f}} {unit}<extra></extra>"
+        def add_max_min_markers(fig, df, cols, secondary_y_cols=[]):
+            for col in cols:
+                is_sec = col in secondary_y_cols
+                if show_max:
+                    max_idx = df[col].idxmax()
+                    fig.add_trace(go.Scatter(
+                        x=[df.loc[max_idx, "Datetime"]], y=[df.loc[max_idx, col]],
+                        mode="markers+text", marker=dict(color="red", size=7, symbol="triangle-up"),
+                        text=[f"Max: {df.loc[max_idx, col]:.1f}"], textposition="top center",
+                        showlegend=False, hoverinfo="skip"
+                    ), secondary_y=is_sec)
+                if show_min:
+                    min_idx = df[col].idxmin()
+                    fig.add_trace(go.Scatter(
+                        x=[df.loc[min_idx, "Datetime"]], y=[df.loc[min_idx, col]],
+                        mode="markers+text", marker=dict(color="blue", size=7, symbol="triangle-down"),
+                        text=[f"Min: {df.loc[min_idx, col]:.1f}"], textposition="bottom center",
+                        showlegend=False, hoverinfo="skip"
+                    ), secondary_y=is_sec)
+
+        # ==========================================
+        # 1. Top Zones Timeline (Scale: 400 - 650 °C)
+        # ==========================================
+        st.subheader(f"📐 Top Zones Timeline {num_files_str}")
+        fig_top = make_subplots(specs=[[{"secondary_y": False}]])
+        for col in top_names:
+            fig_top.add_trace(go.Scatter(
+                x=full_df["Datetime"], y=full_df[col], name=col,
+                hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
-
-            # มาร์กเกอร์จุดสูงสุด (Max Point)
-            if show_max:
-                max_idx = full_df[y_col].idxmax()
-                fig.add_trace(go.Scatter(
-                    x=[full_df.loc[max_idx, "Datetime"]], y=[full_df.loc[max_idx, y_col]],
-                    mode="markers+text", marker=dict(color="red", size=8, symbol="triangle-up"),
-                    text=[f"Max: {full_df.loc[max_idx, y_col]:.1f}"], textposition="top center",
-                    showlegend=False, hoverinfo="skip"
-                ))
-
-            # มาร์กเกอร์จุดต่ำสุด (Min Point)
-            if show_min:
-                min_idx = full_df[y_col].idxmin()
-                fig.add_trace(go.Scatter(
-                    x=[full_df.loc[min_idx, "Datetime"]], y=[full_df.loc[min_idx, y_col]],
-                    mode="markers+text", marker=dict(color="blue", size=8, symbol="triangle-down"),
-                    text=[f"Min: {full_df.loc[min_idx, y_col]:.1f}"], textposition="bottom center",
-                    showlegend=False, hoverinfo="skip"
-                ))
-
-            fig.update_layout(
-                height=350, template="plotly_white", hovermode="x unified",
-                margin=dict(l=40, r=40, t=30, b=30),
-                legend=dict(x=1.02, y=1, xanchor="left", yanchor="top")
-            )
-            fig.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
-            
-            if y_range:
-                fig.update_yaxes(title_text=f"{y_title} [{unit}]", range=y_range)
-            else:
-                fig.update_yaxes(title_text=f"{y_title} [{unit}]", autorange=True)
-
-            return fig
-
-        # ==========================================
-        # 1. Top Zones Timeline (1 Line)
-        # ==========================================
-        st.subheader(f"📐 Top Zones Timeline ({mode_label}) {num_files_str}")
-        fig_top = create_single_line_plot("Top_Single", "Top Zones", y_range=[400, 650], unit="°C", color="#4b7bec")
+        add_max_min_markers(fig_top, full_df, top_names)
+        fig_top.update_layout(
+            height=380, template="plotly_white", hovermode="x unified",
+            margin=dict(l=40, r=40, t=30, b=30),
+            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
+        )
+        fig_top.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        fig_top.update_yaxes(title_text="Temperature [°C]", range=[400, 650])
         st.plotly_chart(fig_top, use_container_width=True)
 
         # ==========================================
-        # 2. Bottom Zones Timeline (1 Line)
+        # 2. Bottom Zones Timeline (Scale: 400 - 650 °C)
         # ==========================================
-        st.subheader(f"📐 Bottom Zones Timeline ({mode_label}) {num_files_str}")
-        fig_bot = create_single_line_plot("Bot_Single", "Bottom Zones", y_range=[400, 650], unit="°C", color="#eb3b5a")
+        st.subheader(f"📐 Bottom Zones Timeline {num_files_str}")
+        fig_bot = make_subplots(specs=[[{"secondary_y": False}]])
+        for col in bot_names:
+            fig_bot.add_trace(go.Scatter(
+                x=full_df["Datetime"], y=full_df[col], name=col,
+                hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
+            ))
+        add_max_min_markers(fig_bot, full_df, bot_names)
+        fig_bot.update_layout(
+            height=380, template="plotly_white", hovermode="x unified",
+            margin=dict(l=40, r=40, t=30, b=30),
+            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
+        )
+        fig_bot.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        fig_bot.update_yaxes(title_text="Temperature [°C]", range=[400, 650])
         st.plotly_chart(fig_bot, use_container_width=True)
 
         # ==========================================
-        # 3. Dryer Temperatures Timeline (1 Line)
+        # 3. Dryer Temperatures Timeline (Scale: 0 - 400 °C)
         # ==========================================
-        st.subheader(f"🔥 Dryer Temperatures Timeline ({mode_label}) {num_files_str}")
-        fig_dryer = create_single_line_plot("Dryer_Single", "Dryer Temp", y_range=[0, 400], unit="°C", color="#26de81")
+        st.subheader(f"🔥 Dryer Temperatures Timeline {num_files_str}")
+        fig_dryer = make_subplots(specs=[[{"secondary_y": False}]])
+
+        fig_dryer.add_trace(go.Scatter(
+            x=full_df["Datetime"], y=full_df["Dryer #1"], name="Dryer #1",
+            line=dict(color="#00b894", width=1.5),
+            hovertemplate="Dryer #1: %{y:.1f} °C<extra></extra>"
+        ))
+        fig_dryer.add_trace(go.Scatter(
+            x=full_df["Datetime"], y=full_df["Dryer #2"], name="Dryer #2",
+            line=dict(color="#ffa500", width=1.5),
+            hovertemplate="Dryer #2: %{y:.1f} °C<extra></extra>"
+        ))
+
+        add_max_min_markers(fig_dryer, full_df, ["Dryer #1", "Dryer #2"])
+
+        fig_dryer.update_layout(
+            height=380, template="plotly_white", hovermode="x unified",
+            margin=dict(l=40, r=40, t=30, b=30),
+            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
+        )
+        fig_dryer.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        fig_dryer.update_yaxes(title_text="Temperature [°C]", range=[0, 400])
         st.plotly_chart(fig_dryer, use_container_width=True)
 
         # ==========================================
-        # 4. Oxygen Concentration Timeline (1 Line)
+        # 4. Oxygen Concentration & N2 Flow Timeline
         # ==========================================
-        st.subheader(f"🧪 Oxygen Concentration Timeline ({mode_label}) {num_files_str}")
-        fig_o2 = create_single_line_plot("O2_Single", "O2 Level", y_range=[0, 200], unit="ppm", color="#fc5c65")
-        st.plotly_chart(fig_o2, use_container_width=True)
+        st.subheader(f"🧪 Oxygen Concentration & N2 Flow Timeline {num_files_str}")
+        fig_o2_n2 = make_subplots(specs=[[{"secondary_y": True}]])
+
+        fig_o2_n2.add_trace(go.Scatter(
+            x=full_df["Datetime"], y=full_df["O2 Exit"], name="O2 Exit",
+            line=dict(color="red", width=1.5),
+            hovertemplate="O2 Exit: %{y:.1f} ppm<extra></extra>"
+        ), secondary_y=False)
+
+        fig_o2_n2.add_trace(go.Scatter(
+            x=full_df["Datetime"], y=full_df["O2 Entrance"], name="O2 Entrance",
+            line=dict(color="#1e90ff", width=1.5),
+            hovertemplate="O2 Entrance: %{y:.1f} ppm<extra></extra>"
+        ), secondary_y=False)
+
+        fig_o2_n2.add_trace(go.Scatter(
+            x=full_df["Datetime"], y=full_df["N2 Flow"], name="N2 Flow",
+            line=dict(color="#2ed573", width=1.2, dash="dash"),
+            hovertemplate="N2 Flow: %{y:.1f}<extra></extra>"
+        ), secondary_y=True)
+
+        add_max_min_markers(fig_o2_n2, full_df, ["O2 Exit", "O2 Entrance", "N2 Flow"], secondary_y_cols=["N2 Flow"])
+
+        fig_o2_n2.update_layout(
+            height=380, template="plotly_white", hovermode="x unified",
+            margin=dict(l=40, r=40, t=30, b=30),
+            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
+        )
+        fig_o2_n2.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        fig_o2_n2.update_yaxes(title_text="O2 Level [ppm]", range=[0, 200], secondary_y=False)
+        fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True)
+        st.plotly_chart(fig_o2_n2, use_container_width=True)
 
         # ==========================================
-        # 5. N2 Flow Timeline (1 Line)
-        # ==========================================
-        st.subheader(f"💨 N2 Flow Timeline {num_files_str}")
-        fig_n2 = create_single_line_plot("N2 Flow", "N2 Flow", y_range=None, unit="L/min", color="#20bf6b")
-        st.plotly_chart(fig_n2, use_container_width=True)
-
-        # ==========================================
-        # 6. Dew Point Timeline (1 Line)
+        # 5. Dew Point Timeline (Scale: -100 to +10 °Cdp)
         # ==========================================
         st.subheader(f"💧 Dew Point Timeline {num_files_str}")
-        fig_dew = create_single_line_plot("Dew Point", "Dew Point", y_range=[-100, 10], unit="°Cdp", color="#8854d0")
+        fig_dew = make_subplots(specs=[[{"secondary_y": False}]])
+
+        fig_dew.add_trace(go.Scatter(
+            x=full_df["Datetime"], y=full_df["Dew Point"], name="Dew Point",
+            line=dict(color="#a55eea", width=1.5),
+            hovertemplate="Dew Point: %{y:.1f} °Cdp<extra></extra>"
+        ))
+
+        add_max_min_markers(fig_dew, full_df, ["Dew Point"])
+
+        fig_dew.update_layout(
+            height=380, template="plotly_white", hovermode="x unified",
+            margin=dict(l=40, r=40, t=30, b=30),
+            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
+        )
+        fig_dew.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        fig_dew.update_yaxes(title_text="Dew Point [°Cdp]", range=[-100, 10])
         st.plotly_chart(fig_dew, use_container_width=True)
