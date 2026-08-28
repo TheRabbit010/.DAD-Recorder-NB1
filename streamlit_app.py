@@ -15,20 +15,15 @@ st.title("📊 DAD Time-Series Visualizer")
 # ==========================================
 # แถบตั้งค่าด้านข้าง (Sidebar)
 # ==========================================
-st.sidebar.header("⏱️ ตั้งค่าเวลา (Time Settings)")
-st.sidebar.markdown("หากเวลาในกราฟไปไม่ถึงจุดสิ้นสุด ให้ปรับความถี่ให้ตรงกับค่า Setting ของเครื่องบันทึก")
-sample_rate = st.sidebar.number_input("ความถี่การบันทึก (วินาที/จุด)", min_value=1, max_value=3600, value=1, step=1)
-
-st.sidebar.divider()
 st.sidebar.header("⚙️ การแสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้าง Mapping สัญญาณตาม Header จริง
+# โครงสร้าง Mapping สัญญาณ (ลำดับบล็อกช่องสัญญาณ)
 # ==========================================
 col_mapping = {
-    1: 4,   # Z#1 Top
+    1: 4,   # Z#1 Top (ดึงบล็อกที่ 4)
     2: 6,   # Z#2 Top
     3: 8,   # Z#3 Top
     4: 10,  # Z#4 Top
@@ -59,12 +54,14 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
-all_col_names = [ch_info[i] for i in range(1, 21)]
+# ตั้งค่าคงที่ตามสถาปัตยกรรม
+HEADER_OFFSET = 512
+TOTAL_CHANNELS = 90  # มี 90 ช่องสัญญาณในไฟล์
+SCALE_DIVIDER = 10.0
+DTYPE_STR = ">i2"
+
 top_names = [ch_info[i] for i in range(1, 8)]
 bot_names = [ch_info[i] for i in range(8, 15)]
-
-SCALE_DIVIDER = 10.0
-STRIDE = 90  # จำนวนช่องทั้งหมดต่อ 1 Block
 
 COLOR_PALETTE = [
     "#8e44ad", "#2980b9", "#27ae60", "#d35400", 
@@ -90,10 +87,11 @@ def extract_start_time_from_filename(filename):
             year, month, day = 2000 + p1, p2, p3
 
         try:
-            return datetime(year, month, day, hh, mm, ss)
+            return datetime(year, month, day, hh, mm, ss), True
         except ValueError:
             pass
-    return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
+            
+    return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0), False
 
 # ==========================================
 # อัปโหลดไฟล์ .DAD
@@ -103,56 +101,64 @@ uploaded_files = st.file_uploader("เลือกไฟล์ .DAD", type=["dad
 if uploaded_files:
     sorted_files = sorted(uploaded_files, key=lambda x: x.name)
     all_dfs = []
-
+    
+    # คำนวณหาความถี่เวลา (Sample Rate) ระหว่างไฟล์
+    file_start_times = []
     for file in sorted_files:
+        dt, valid = extract_start_time_from_filename(file.name)
+        if valid:
+            file_start_times.append(dt)
+
+    for i, file in enumerate(sorted_files):
         try:
             binary_data = file.read()
-            # 1. แปลงไฟล์ทั้งก้อนให้เป็น Array ของ Int16
-            file_words = np.frombuffer(binary_data, dtype='>i2')
-            total_words = len(file_words)
+            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
             
-            records = []
+            # คำนวณจำนวนข้อมูลต่อ 1 ช่องสัญญาณ
+            points_per_channel = len(raw_signals) // TOTAL_CHANNELS
             
-            # 2. ระบบสแกนหาจุดเชื่อมข้อมูล (Sync-Hunting Algorithm)
-            i = 256  # ข้าม Header ส่วนแรก
-            while i < total_words - STRIDE:
-                # ดึงกลุ่มตัวอย่างอุณหภูมิ 7 โซนบนมาตรวจสอบ (Z1 ถึง Z7)
-                z_vals = file_words[i+4 : i+17 : 2]
-                
-                # เช็คว่าเป็นตัวเลขความร้อนปกติหรือไม่ (-50°C ถึง 1500°C)
-                valid_count = np.sum((z_vals > -500) & (z_vals < 15000))
-                
-                if valid_count >= 4:
-                    # ✅ พบ Block ข้อมูลที่ถูกต้อง ดึงค่าออกมา 20 ช่อง
-                    record_data = []
-                    for ch_num, col_idx in col_mapping.items():
-                        val = file_words[i + col_idx] / SCALE_DIVIDER
-                        # กรอง Error Code ของ Yokogawa (เช่น -3276.8) ให้เป็นช่องว่าง
-                        if val < -1000.0 or val > 3000.0:
-                            val = np.nan
-                        record_data.append(val)
-                    
-                    records.append(record_data)
-                    i += STRIDE  # กระโดดข้ามไปตรวจสอบ Block ถัดไป
-                else:
-                    # ❌ เจอ Block Header หรือขยะ ให้เลื่อนเดินหน้าทีละ 1 Word จนกว่าจะเจอข้อมูลจริง
-                    i += 1
-
-            if len(records) == 0:
-                st.warning(f"ไฟล์ {file.name} ไม่พบโครงสร้างข้อมูลที่ถูกต้อง")
+            if points_per_channel == 0:
+                st.warning(f"ไฟล์ {file.name} ข้อมูลไม่เพียงพอ")
                 continue
 
-            df_single = pd.DataFrame(records, columns=all_col_names)
+            # ตัดเศษที่เกินมาทิ้ง เพื่อให้จัดเข้าตาราง 90 คอลัมน์ได้พอดี
+            usable_points = points_per_channel * TOTAL_CHANNELS
             
-            # เติมจุดเชื่อมข้อมูลที่หายไปจากการกรอง Error ให้เส้นกราฟสมูท
-            for col in df_single.columns:
-                df_single[col] = df_single[col].interpolate(method='linear').ffill().bfill()
+            # 💡 หัวใจสำคัญ: จัดกลุ่ม Matrix ด้วย order='F' (อ่านข้อมูลดิ่งลงทีละช่องจนจบ แล้วค่อยขึ้นช่องใหม่)
+            reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='F')
+            reshaped_data = reshaped_data / SCALE_DIVIDER
+
+            # ดึงเฉพาะช่องที่เราต้องการ
+            data_dict = {}
+            for ch_num, col_idx in col_mapping.items():
+                ch_name = ch_info[ch_num]
                 
-            # สร้างแกนเวลาให้ตรงตามความถี่การบันทึก (วินาที/จุด)
-            start_dt = extract_start_time_from_filename(file.name)
-            time_axis = pd.date_range(start=start_dt, periods=len(df_single), freq=f"{int(sample_rate)}s")
+                # กรองค่าขยะ Error (อุณหภูมิที่เกิน 3000°C หรือติดลบเยอะๆ)
+                val_array = reshaped_data[:, col_idx]
+                val_array = np.where((val_array < -500.0) | (val_array > 3500.0), np.nan, val_array)
+                data_dict[ch_name] = val_array
+
+            df_single = pd.DataFrame(data_dict)
+
+            # กำหนดแกนเวลา
+            start_dt, has_auto_dt = extract_start_time_from_filename(file.name)
+            
+            # คำนวณความเร็วในการบันทึกอัตโนมัติ (จากไฟล์ถัดไป)
+            if i < len(file_start_times) - 1:
+                delta_sec = (file_start_times[i+1] - start_dt).total_seconds()
+                sample_rate = delta_sec / points_per_channel if points_per_channel > 0 else 1.0
+            else:
+                sample_rate = 1.0  # ค่าเริ่มต้นหากเป็นไฟล์สุดท้าย
+
+            time_freq = f"{max(1, int(sample_rate * 1000))}ms"
+            time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq=time_freq)
+            
             df_single.insert(0, "Datetime", time_axis)
             
+            # เชื่อมจุดข้อมูลที่หายไป (จากการกรอง Error) ให้เส้นสมูท
+            for col in df_single.columns[1:]:
+                df_single[col] = df_single[col].interpolate(method='linear').ffill().bfill()
+                
             all_dfs.append(df_single)
             
         except Exception as e:
@@ -166,7 +172,7 @@ if uploaded_files:
         num_files_str = f"({len(sorted_files)} Files)"
 
         # ==========================================
-        # 📥 ปุ่ม Export Excel / CSV ด้านข้าง
+        # 📥 ปุ่ม Export Excel / CSV
         # ==========================================
         st.sidebar.divider()
         st.sidebar.header("📥 ดาวน์โหลดข้อมูล (Export)")
@@ -199,7 +205,7 @@ if uploaded_files:
                 use_container_width=True
             )
 
-        with st.expander("🔍 ดูตารางข้อมูลดิบ (ล็อกคอลัมน์เป๊ะทุกบรรทัดแล้ว)"):
+        with st.expander("🔍 ดูตารางข้อมูลดิบ (แก้ไขปัญหาข้อมูลวิ่งทแยงมุมเรียบร้อย)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         # ----------------------------------------
@@ -246,7 +252,6 @@ if uploaded_files:
                         showlegend=False, hoverinfo="skip"
                     ), secondary_y=is_sec)
 
-        # 1. Top Zones
         st.subheader(f"📐 Top Zones Timeline {num_files_str}")
         fig_top = make_subplots(specs=[[{"secondary_y": False}]])
         for idx, col in enumerate(top_names):
@@ -256,10 +261,9 @@ if uploaded_files:
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
         add_max_min_markers(fig_top, full_df, top_names)
-        apply_white_theme_style(fig_top, "Temperature [°C]", y_range=None)
+        apply_white_theme_style(fig_top, "Temperature [°C]", y_range=[400, 650])
         st.plotly_chart(fig_top, use_container_width=True)
 
-        # 2. Bottom Zones
         st.subheader(f"📐 Bottom Zones Timeline {num_files_str}")
         fig_bot = make_subplots(specs=[[{"secondary_y": False}]])
         for idx, col in enumerate(bot_names):
@@ -269,10 +273,9 @@ if uploaded_files:
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
         add_max_min_markers(fig_bot, full_df, bot_names)
-        apply_white_theme_style(fig_bot, "Temperature [°C]", y_range=None)
+        apply_white_theme_style(fig_bot, "Temperature [°C]", y_range=[400, 650])
         st.plotly_chart(fig_bot, use_container_width=True)
 
-        # 3. Dryer
         st.subheader(f"🔥 Dryer Temperatures Timeline {num_files_str}")
         fig_dryer = make_subplots(specs=[[{"secondary_y": False}]])
         fig_dryer.add_trace(go.Scatter(
@@ -282,10 +285,9 @@ if uploaded_files:
             x=full_df["Datetime"], y=full_df["Dryer #2"], name="Dryer #2", line=dict(color="#e67e22", width=2.0)
         ))
         add_max_min_markers(fig_dryer, full_df, ["Dryer #1", "Dryer #2"])
-        apply_white_theme_style(fig_dryer, "Temperature [°C]", y_range=None)
+        apply_white_theme_style(fig_dryer, "Temperature [°C]", y_range=[0, 400])
         st.plotly_chart(fig_dryer, use_container_width=True)
 
-        # 4. Oxygen & N2
         st.subheader(f"🧪 Oxygen Concentration & N2 Flow Timeline {num_files_str}")
         fig_o2_n2 = make_subplots(specs=[[{"secondary_y": True}]])
         fig_o2_n2.add_trace(go.Scatter(
@@ -298,16 +300,15 @@ if uploaded_files:
             x=full_df["Datetime"], y=full_df["N2 Flow"], name="N2 Flow", line=dict(color="#2ecc71", width=1.5, dash="dash")
         ), secondary_y=True)
         add_max_min_markers(fig_o2_n2, full_df, ["O2 Exit", "O2 Entrance", "N2 Flow"], secondary_y_cols=["N2 Flow"])
-        apply_white_theme_style(fig_o2_n2, "O2 Level [ppm]", y_range=None)
+        apply_white_theme_style(fig_o2_n2, "O2 Level [ppm]", y_range=[0, 200])
         fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True, showgrid=False)
         st.plotly_chart(fig_o2_n2, use_container_width=True)
 
-        # 5. Dew Point
         st.subheader(f"💧 Dew Point Timeline {num_files_str}")
         fig_dew = make_subplots(specs=[[{"secondary_y": False}]])
         fig_dew.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["Dew Point"], name="Dew Point", line=dict(color="#9b59b6", width=2.0)
         ))
         add_max_min_markers(fig_dew, full_df, ["Dew Point"])
-        apply_white_theme_style(fig_dew, "Dew Point [°Cdp]", y_range=None)
+        apply_white_theme_style(fig_dew, "Dew Point [°Cdp]", y_range=[-100, 10])
         st.plotly_chart(fig_dew, use_container_width=True)
