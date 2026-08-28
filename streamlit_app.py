@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 1. ตั้งค่าหน้าจอ
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
@@ -54,10 +54,9 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
-HEADER_OFFSET = 512
-STRIDE_LENGTH = 89
+POSSIBLE_HEADER_OFFSETS = [512, 1024, 256, 0]
+POSSIBLE_RECORD_SIZES = [178, 180, 176, 184, 90, 88]
 SCALE_DIVIDER = 10.0
-DTYPE_STR = ">i2"
 
 top_names = [ch_info[i] for i in range(1, 8)]
 bot_names = [ch_info[i] for i in range(8, 15)]
@@ -69,21 +68,34 @@ COLOR_PALETTE = [
     "#c0392b", "#16a085", "#e74c3c", "#2ecc71"
 ]
 
+# 💡 ถอดรหัสเวลาฝัง BCD Timestamp จากแต่ละ Record ในไฟล์ไบนารี
+def decode_bcd_timestamp(byte_arr):
+    try:
+        y = ((byte_arr[0] >> 4) * 10) + (byte_arr[0] & 0x0F)
+        m = ((byte_arr[1] >> 4) * 10) + (byte_arr[1] & 0x0F)
+        d = ((byte_arr[2] >> 4) * 10) + (byte_arr[2] & 0x0F)
+        hh = ((byte_arr[3] >> 4) * 10) + (byte_arr[3] & 0x0F)
+        mm = ((byte_arr[4] >> 4) * 10) + (byte_arr[4] & 0x0F)
+        ss = ((byte_arr[5] >> 4) * 10) + (byte_arr[5] & 0x0F)
+        
+        if 20 <= y <= 35 and 1 <= m <= 12 and 1 <= d <= 31 and 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59:
+            return datetime(2000 + y, m, d, hh, mm, ss)
+    except Exception:
+        pass
+    return None
+
 def extract_start_time_from_filename(filename):
-    # ค้นหาตัวเลข 6 หลักทั้งหมดที่ถูกคั่นด้วยขีดล่าง (_)
     matches = re.findall(r'\d{6}', filename)
-    
-    # ดึงเฉพาะ 2 ชุดสุดท้ายเสมอ (เพราะไฟล์คือรหัสเครื่อง_วันที่_เวลา.DAD)
     if len(matches) >= 2:
-        d_str = matches[-2] # วันที่ เช่น 260813
-        t_str = matches[-1] # เวลา เช่น 070800
+        d_str = matches[-2]
+        t_str = matches[-1]
         
         p1, p2, p3 = int(d_str[:2]), int(d_str[2:4]), int(d_str[4:6])
         hh, mm, ss = int(t_str[:2]), int(t_str[2:4]), int(t_str[4:6])
             
-        if 20 <= p1 <= 30:  # รูปแบบ YYMMDD (เช่น 26 = 2026)
+        if 20 <= p1 <= 30:  
             year, month, day = 2000 + p1, p2, p3
-        elif 20 <= p3 <= 30: # รูปแบบ DDMMYY
+        elif 20 <= p3 <= 30: 
             day, month, year = p1, p2, 2000 + p3
         else:
             year, month, day = 2000 + p1, p2, p3
@@ -93,8 +105,83 @@ def extract_start_time_from_filename(filename):
         except ValueError:
             pass
             
-    # กรณีหาไม่เจอจริงๆ คืนค่าเวลา 08:00 ของวันนี้
     return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
+
+# ฟังก์ชันถอดรหัสแบบสแกน Record-by-Record
+def parse_dad_binary_file(file_bytes, filename):
+    best_offset = 512
+    best_rsize = 178
+    best_valid_cnt = -1
+    
+    # 1. ค้นหา Offset และขนาด Record ที่ถูกต้องที่สุด
+    for offset in POSSIBLE_HEADER_OFFSETS:
+        buf = file_bytes[offset:]
+        if len(buf) < 178:
+            continue
+        for rsize in POSSIBLE_RECORD_SIZES:
+            total_recs = len(buf) // rsize
+            if total_recs == 0:
+                continue
+            
+            valid_cnt = 0
+            for r in range(min(total_recs, 40)):
+                rec_bytes = buf[r*rsize : r*rsize + 6]
+                if decode_bcd_timestamp(rec_bytes) is not None:
+                    valid_cnt += 1
+            
+            if valid_cnt > best_valid_cnt:
+                best_valid_cnt = valid_cnt
+                best_offset = offset
+                best_rsize = rsize
+
+    # 2. ถอดรหัสวันที่ เวลา และสัญญาณตามโครงสร้าง Record จริง
+    buf = file_bytes[best_offset:]
+    total_records = len(buf) // best_rsize
+    
+    timestamps = []
+    data_dict = {ch_info[ch]: np.zeros(total_records) for ch in range(1, 21)}
+    fallback_dt = extract_start_time_from_filename(filename)
+    last_valid_ts = fallback_dt
+    
+    for r in range(total_records):
+        rec_raw = buf[r*best_rsize : (r+1)*best_rsize]
+        
+        # ถอดรหัส BCD Timestamp ประจำบรรทัด
+        ts = decode_bcd_timestamp(rec_raw[:6])
+        if ts is not None:
+            timestamps.append(ts)
+            last_valid_ts = ts
+        else:
+            if len(timestamps) > 0:
+                last_valid_ts = last_valid_ts + timedelta(seconds=1)
+                timestamps.append(last_valid_ts)
+            else:
+                timestamps.append(fallback_dt)
+                
+        # ถอดรหัสค่าช่องสัญญาณ (Int16 Big-Endian)
+        words_in_rec = best_rsize // 2
+        rec_words = np.frombuffer(rec_raw[:words_in_rec*2], dtype='>i2').astype(float) / SCALE_DIVIDER
+        
+        for ch_num, col_idx in col_mapping.items():
+            ch_name = ch_info[ch_num]
+            if col_idx < len(rec_words):
+                val = rec_words[col_idx]
+                # กรองค่ารหัสสถานะความผิดปกติ (Error Flags / Status Overrange) ออก
+                if val < -500.0 or val > 3500.0:
+                    data_dict[ch_name][r] = np.nan
+                else:
+                    data_dict[ch_name][r] = val
+            else:
+                data_dict[ch_name][r] = np.nan
+
+    df = pd.DataFrame(data_dict)
+    
+    # เติมค่าเชื่อมจุดที่หายไปจากการกรอง Error Flag
+    for col in df.columns:
+        df[col] = df[col].interpolate(method='linear').ffill().bfill()
+        
+    df.insert(0, "Datetime", timestamps)
+    return df
 
 # ==========================================
 # อัปโหลดไฟล์ .DAD
@@ -108,33 +195,9 @@ if uploaded_files:
     for file in sorted_files:
         try:
             binary_data = file.read()
-            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET)
-            
-            total_records = len(raw_signals) // STRIDE_LENGTH
-            if total_records == 0:
-                st.warning(f"ไฟล์ {file.name} มีขนาดเล็กเกินไป")
-                continue
-
-            reshaped_raw = raw_signals[:total_records * STRIDE_LENGTH].reshape(total_records, STRIDE_LENGTH)
-            reshaped_scaled = reshaped_raw.astype(float) / SCALE_DIVIDER
-
-            data_dict = {}
-            for ch_num, col_idx in col_mapping.items():
-                ch_name = ch_info[ch_num]
-                if col_idx < STRIDE_LENGTH:
-                    data_dict[ch_name] = reshaped_scaled[:, col_idx]
-                else:
-                    data_dict[ch_name] = np.zeros(total_records)
-
-            df_single = pd.DataFrame(data_dict)
-
-            # ดึงเวลาเริ่มต้นที่แท้จริงจากชื่อไฟล์
-            file_start_dt = extract_start_time_from_filename(file.name)
-            time_axis = pd.date_range(start=file_start_dt, periods=total_records, freq="1s")
-            df_single.insert(0, "Datetime", time_axis)
-            
-            all_dfs.append(df_single)
-            
+            df_parsed = parse_dad_binary_file(binary_data, file.name)
+            if df_parsed is not None and not df_parsed.empty:
+                all_dfs.append(df_parsed)
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์ {file.name}: {e}")
 
@@ -179,7 +242,7 @@ if uploaded_files:
                 use_container_width=True
             )
 
-        with st.expander("🔍 ดูตารางข้อมูลดิบ (ตรวจเช็คความถูกต้องของตัวเลข)"):
+        with st.expander("🔍 ดูตารางข้อมูลดิบ (ตรวจเช็คความถูกต้องของตัวเลขและเวลา)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
@@ -223,6 +286,7 @@ if uploaded_files:
                         showlegend=False, hoverinfo="skip"
                     ), secondary_y=is_sec)
 
+        # 1. Top Zones
         st.subheader(f"📐 Top Zones Timeline {num_files_str}")
         fig_top = make_subplots(specs=[[{"secondary_y": False}]])
         for idx, col in enumerate(top_names):
@@ -235,6 +299,7 @@ if uploaded_files:
         apply_white_theme_style(fig_top, "Temperature [°C]", y_range=None)
         st.plotly_chart(fig_top, use_container_width=True)
 
+        # 2. Bottom Zones
         st.subheader(f"📐 Bottom Zones Timeline {num_files_str}")
         fig_bot = make_subplots(specs=[[{"secondary_y": False}]])
         for idx, col in enumerate(bot_names):
@@ -247,6 +312,7 @@ if uploaded_files:
         apply_white_theme_style(fig_bot, "Temperature [°C]", y_range=None)
         st.plotly_chart(fig_bot, use_container_width=True)
 
+        # 3. Dryer
         st.subheader(f"🔥 Dryer Temperatures Timeline {num_files_str}")
         fig_dryer = make_subplots(specs=[[{"secondary_y": False}]])
         fig_dryer.add_trace(go.Scatter(
@@ -259,6 +325,7 @@ if uploaded_files:
         apply_white_theme_style(fig_dryer, "Temperature [°C]", y_range=None)
         st.plotly_chart(fig_dryer, use_container_width=True)
 
+        # 4. Oxygen & N2
         st.subheader(f"🧪 Oxygen Concentration & N2 Flow Timeline {num_files_str}")
         fig_o2_n2 = make_subplots(specs=[[{"secondary_y": True}]])
         fig_o2_n2.add_trace(go.Scatter(
@@ -275,6 +342,7 @@ if uploaded_files:
         fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True, showgrid=False)
         st.plotly_chart(fig_o2_n2, use_container_width=True)
 
+        # 5. Dew Point
         st.subheader(f"💧 Dew Point Timeline {num_files_str}")
         fig_dew = make_subplots(specs=[[{"secondary_y": False}]])
         fig_dew.add_trace(go.Scatter(
