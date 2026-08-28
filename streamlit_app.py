@@ -158,10 +158,13 @@ if uploaded_files:
         num_files_str = f"({len(sorted_files)} Files)"
 
         # ==========================================
-        # 📥 สร้างไฟล์ Excel รวมทุกชีท
+        # 📥 ย้ายปุ่ม / แจ้งเตือน Excel ไปไว้ใน Sidebar ด้านซ้าย
         # ==========================================
-        excel_buffer = io.BytesIO()
+        st.sidebar.divider()
+        st.sidebar.header("📥 ดาวน์โหลดข้อมูล (Export)")
+
         try:
+            excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                 full_df.to_excel(writer, sheet_name='All Data', index=False)
                 full_df[['Datetime'] + top_names].to_excel(writer, sheet_name='Top Zones', index=False)
@@ -172,21 +175,18 @@ if uploaded_files:
 
             excel_data = excel_buffer.getvalue()
 
-            col_btn, col_exp = st.columns([1, 4])
-            with col_btn:
-                st.download_button(
-                    label="📥 ดาวน์โหลดข้อมูลเป็น Excel (.xlsx)",
-                    data=excel_data,
-                    file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-            
-            with col_exp:
-                with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
-                    st.dataframe(full_df.head(100), use_container_width=True)
+            st.sidebar.download_button(
+                label="📥 ดาวน์โหลดไฟล์ Excel (.xlsx)",
+                data=excel_data,
+                file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
         except ModuleNotFoundError:
-            st.warning("⚠️ กรุณาเพิ่ม `openpyxl` ลงในไฟล์ `requirements.txt` บน GitHub เพื่อเปิดใช้งานปุ่มดาวน์โหลดไฟล์ Excel")
+            st.sidebar.warning("⚠️ กรุณาเพิ่ม openpyxl ลงในไฟล์ requirements.txt บน GitHub เพื่อเปิดใช้งานปุ่มดาวน์โหลดไฟล์ Excel")
+
+        with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
+            st.dataframe(full_df.head(100), use_container_width=True)
 
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
             fig.update_layout(
