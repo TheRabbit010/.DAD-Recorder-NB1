@@ -4,18 +4,17 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # 1. ตั้งค่าหน้าจอ
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
 
-st.title("📊 DAD Time-Series Visualizer")
+st.title("📊 DAD Time-Series Visualizer (Dark Recorder Style)")
 
 # ==========================================
-# แถบตั้งค่าด้านข้าง (Sidebar) - ตัดการกรอกความถี่บันทึกออกแล้ว
+# แถบตั้งค่าด้านข้าง (Sidebar)
 # ==========================================
 st.sidebar.header("⏰ การตั้งค่าเวลาสำรอง (Fallback Time)")
-st.sidebar.caption("ใช้เมื่อไม่สามารถตรวจจับเวลาจากชื่อไฟล์ได้")
 start_date = st.sidebar.date_input("วันที่เริ่มต้น", pd.to_datetime("today"))
 start_time = st.sidebar.time_input("เวลาเริ่มต้น", pd.to_datetime("08:00").time())
 fallback_start_datetime = datetime.combine(start_date, start_time)
@@ -26,7 +25,7 @@ show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Sh
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้างถอดรหัสและ Mapping ตำแหน่งคอลัมน์ดิบ (Yokogawa .DAD)
+# โครงสร้างถอดรหัสและ Mapping ตำแหน่งคอลัมน์จริง (Yokogawa .DAD)
 # ==========================================
 HEADER_OFFSET = 512
 SCALE_DIVIDER = 10.0
@@ -84,7 +83,18 @@ bot_names = [ch_info[i] for i in range(8, 15)]
 col_names = [ch_info[i] for i in range(1, 21)]
 num_channels = len(col_names)
 
-# ฟังก์ชันตรวจจับ วันที่และเวลา จากชื่อไฟล์อัตโนมัติ (เช่น YYMMDD_HHMMSS)
+# สีเส้นสัญญาณสไตล์หน้าจอ Recorder
+COLOR_PALETTE = [
+    "#E040FB",  # Purple / Violet
+    "#29B6F6",  # Light Blue
+    "#00E676",  # Bright Green
+    "#FF9100",  # Orange
+    "#FFEB3B",  # Yellow
+    "#FF1744",  # Red
+    "#1DE9B6",  # Cyan / Teal
+    "#FF4081"   # Pink
+]
+
 def extract_datetime_from_filename(filename, default_dt):
     match = re.search(r'(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})', filename)
     if match:
@@ -105,7 +115,6 @@ if uploaded_files:
     sorted_files = sorted(uploaded_files, key=lambda x: x.name)
     file_info_list = []
 
-    # รอบที่ 1: อ่านข้อมูลดิบและถอดรหัสหาจำนวนจุดข้อมูลพร้อมเวลาเริ่มต้นของแต่ละไฟล์
     for file in sorted_files:
         try:
             binary_data = file.read()
@@ -132,7 +141,6 @@ if uploaded_files:
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์ {file.name}: {e}")
 
-    # รอบที่ 2: คำนวณ Sampling Rate (ความถี่บันทึก) อัตโนมัติและสร้างแกนเวลาแบบต่อเนื่อง
     if file_info_list:
         all_dfs = []
         current_time_cursor = fallback_start_datetime
@@ -140,13 +148,12 @@ if uploaded_files:
         for i, info in enumerate(file_info_list):
             total_rows = info["total_rows"]
             
-            # คำนวณความถี่อัตโนมัติจากระยะห่างของไฟล์ถัดไป (ถ้ามี)
             if i < len(file_info_list) - 1 and info["has_auto_dt"] and file_info_list[i+1]["has_auto_dt"]:
                 delta_sec = (file_info_list[i+1]["start_datetime"] - info["start_datetime"]).total_seconds()
                 auto_sample_rate = delta_sec / total_rows if total_rows > 0 else 1.0
                 file_start_time = info["start_datetime"]
             else:
-                auto_sample_rate = 1.0  # ค่าเริ่มต้น 1 วินาที/จุด หากเป็นไฟล์เดี่ยว
+                auto_sample_rate = 1.0
                 file_start_time = info["start_datetime"] if info["has_auto_dt"] else current_time_cursor
 
             time_freq = f"{int(auto_sample_rate * 1000)}ms"
@@ -158,8 +165,6 @@ if uploaded_files:
             all_dfs.append(df_single)
 
         full_df = pd.concat(all_dfs, ignore_index=True)
-
-        # 💡 ป้องกันกราฟขาด/ฟันปลา: เรียงลำดับเวลาให้ถูกต้อง และตัดจุดเวลาที่ซ้ำซ้อน
         full_df = full_df.sort_values(by="Datetime").reset_index(drop=True)
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
@@ -168,6 +173,41 @@ if uploaded_files:
         with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
+        # ฟังก์ชันจัดสไตล์กราฟให้เหมือนกับตัวอย่างภาพ image_7acdeb.png
+        def apply_dark_recorder_style(fig, y_title, y_range=None, is_secondary=False):
+            fig.update_layout(
+                height=400,
+                template="plotly_dark",
+                paper_bgcolor="#262626",  # สีพื้นหลังรอบนอก
+                plot_bgcolor="#383838",   # สีพื้นหลังกราฟโทนเทาเข้มตามรูปตัวอย่าง
+                hovermode="x unified",
+                margin=dict(l=50, r=50, t=30, b=40),
+                legend=dict(
+                    x=1.01, y=1,
+                    xanchor="left", yanchor="top",
+                    bgcolor="rgba(0,0,0,0.5)",
+                    font=dict(color="#FFFFFF", size=11)
+                )
+            )
+            fig.update_xaxes(
+                title_text="Date & Time",
+                tickformat="%H:%M:%S\n%b %d, %Y",
+                showgrid=True,
+                gridcolor="#555555",
+                gridwidth=1,
+                zerolinecolor="#555555"
+            )
+            fig.update_yaxes(
+                title_text=y_title,
+                showgrid=True,
+                gridcolor="#555555",
+                gridwidth=1,
+                zerolinecolor="#555555",
+                range=y_range if y_range else None,
+                autorange=True if not y_range else False,
+                secondary_y=is_secondary
+            )
+
         def add_max_min_markers(fig, df, cols, secondary_y_cols=[]):
             for col in cols:
                 is_sec = col in secondary_y_cols
@@ -175,7 +215,7 @@ if uploaded_files:
                     max_idx = df[col].idxmax()
                     fig.add_trace(go.Scatter(
                         x=[df.loc[max_idx, "Datetime"]], y=[df.loc[max_idx, col]],
-                        mode="markers+text", marker=dict(color="red", size=7, symbol="triangle-up"),
+                        mode="markers+text", marker=dict(color="#FF1744", size=8, symbol="triangle-up"),
                         text=[f"Max: {df.loc[max_idx, col]:.1f}"], textposition="top center",
                         showlegend=False, hoverinfo="skip"
                     ), secondary_y=is_sec)
@@ -183,79 +223,60 @@ if uploaded_files:
                     min_idx = df[col].idxmin()
                     fig.add_trace(go.Scatter(
                         x=[df.loc[min_idx, "Datetime"]], y=[df.loc[min_idx, col]],
-                        mode="markers+text", marker=dict(color="blue", size=7, symbol="triangle-down"),
+                        mode="markers+text", marker=dict(color="#29B6F6", size=8, symbol="triangle-down"),
                         text=[f"Min: {df.loc[min_idx, col]:.1f}"], textposition="bottom center",
                         showlegend=False, hoverinfo="skip"
                     ), secondary_y=is_sec)
 
         # ==========================================
-        # 1. Top Zones Timeline (Scale: 400 - 650 °C)
+        # 1. Top Zones Timeline
         # ==========================================
         st.subheader(f"📐 Top Zones Timeline {num_files_str}")
         fig_top = make_subplots(specs=[[{"secondary_y": False}]])
-        for col in top_names:
+        for idx, col in enumerate(top_names):
             fig_top.add_trace(go.Scatter(
                 x=full_df["Datetime"], y=full_df[col], name=col,
-                connectgaps=False,
+                line=dict(width=1.8, color=COLOR_PALETTE[idx % len(COLOR_PALETTE)]),
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
         add_max_min_markers(fig_top, full_df, top_names)
-        fig_top.update_layout(
-            height=380, template="plotly_white", hovermode="x unified",
-            margin=dict(l=40, r=40, t=30, b=30),
-            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
-        )
-        fig_top.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
-        fig_top.update_yaxes(title_text="Temperature [°C]", range=[400, 650])
+        apply_dark_recorder_style(fig_top, "Temperature [°C]", y_range=[400, 650])
         st.plotly_chart(fig_top, use_container_width=True)
 
         # ==========================================
-        # 2. Bottom Zones Timeline (Scale: 400 - 650 °C)
+        # 2. Bottom Zones Timeline
         # ==========================================
         st.subheader(f"📐 Bottom Zones Timeline {num_files_str}")
         fig_bot = make_subplots(specs=[[{"secondary_y": False}]])
-        for col in bot_names:
+        for idx, col in enumerate(bot_names):
             fig_bot.add_trace(go.Scatter(
                 x=full_df["Datetime"], y=full_df[col], name=col,
-                connectgaps=False,
+                line=dict(width=1.8, color=COLOR_PALETTE[idx % len(COLOR_PALETTE)]),
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
         add_max_min_markers(fig_bot, full_df, bot_names)
-        fig_bot.update_layout(
-            height=380, template="plotly_white", hovermode="x unified",
-            margin=dict(l=40, r=40, t=30, b=30),
-            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
-        )
-        fig_bot.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
-        fig_bot.update_yaxes(title_text="Temperature [°C]", range=[400, 650])
+        apply_dark_recorder_style(fig_bot, "Temperature [°C]", y_range=[400, 650])
         st.plotly_chart(fig_bot, use_container_width=True)
 
         # ==========================================
-        # 3. Dryer Temperatures Timeline (Scale: 0 - 400 °C)
+        # 3. Dryer Temperatures Timeline
         # ==========================================
         st.subheader(f"🔥 Dryer Temperatures Timeline {num_files_str}")
         fig_dryer = make_subplots(specs=[[{"secondary_y": False}]])
 
         fig_dryer.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["Dryer #1"], name="Dryer #1",
-            line=dict(color="#00b894", width=1.5), connectgaps=False,
+            line=dict(color="#00E676", width=2.0),
             hovertemplate="Dryer #1: %{y:.1f} °C<extra></extra>"
         ))
         fig_dryer.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["Dryer #2"], name="Dryer #2",
-            line=dict(color="#ffa500", width=1.5), connectgaps=False,
+            line=dict(color="#FF9100", width=2.0),
             hovertemplate="Dryer #2: %{y:.1f} °C<extra></extra>"
         ))
 
         add_max_min_markers(fig_dryer, full_df, ["Dryer #1", "Dryer #2"])
-
-        fig_dryer.update_layout(
-            height=380, template="plotly_white", hovermode="x unified",
-            margin=dict(l=40, r=40, t=30, b=30),
-            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
-        )
-        fig_dryer.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
-        fig_dryer.update_yaxes(title_text="Temperature [°C]", range=[0, 400])
+        apply_dark_recorder_style(fig_dryer, "Temperature [°C]", y_range=[0, 400])
         st.plotly_chart(fig_dryer, use_container_width=True)
 
         # ==========================================
@@ -266,53 +287,39 @@ if uploaded_files:
 
         fig_o2_n2.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["O2 Exit"], name="O2 Exit",
-            line=dict(color="red", width=1.5), connectgaps=False,
+            line=dict(color="#FF1744", width=2.0),
             hovertemplate="O2 Exit: %{y:.1f} ppm<extra></extra>"
         ), secondary_y=False)
 
         fig_o2_n2.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["O2 Entrance"], name="O2 Entrance",
-            line=dict(color="#1e90ff", width=1.5), connectgaps=False,
+            line=dict(color="#29B6F6", width=2.0),
             hovertemplate="O2 Entrance: %{y:.1f} ppm<extra></extra>"
         ), secondary_y=False)
 
         fig_o2_n2.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["N2 Flow"], name="N2 Flow",
-            line=dict(color="#2ed573", width=1.2, dash="dash"), connectgaps=False,
+            line=dict(color="#00E676", width=1.5, dash="dash"),
             hovertemplate="N2 Flow: %{y:.1f}<extra></extra>"
         ), secondary_y=True)
 
         add_max_min_markers(fig_o2_n2, full_df, ["O2 Exit", "O2 Entrance", "N2 Flow"], secondary_y_cols=["N2 Flow"])
-
-        fig_o2_n2.update_layout(
-            height=380, template="plotly_white", hovermode="x unified",
-            margin=dict(l=40, r=40, t=30, b=30),
-            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
-        )
-        fig_o2_n2.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
-        fig_o2_n2.update_yaxes(title_text="O2 Level [ppm]", range=[0, 200], secondary_y=False)
-        fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True)
+        apply_dark_recorder_style(fig_o2_n2, "O2 Level [ppm]", y_range=[0, 200])
+        fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True, showgrid=False)
         st.plotly_chart(fig_o2_n2, use_container_width=True)
 
         # ==========================================
-        # 5. Dew Point Timeline (Scale: -100 to +10 °Cdp)
+        # 5. Dew Point Timeline
         # ==========================================
         st.subheader(f"💧 Dew Point Timeline {num_files_str}")
         fig_dew = make_subplots(specs=[[{"secondary_y": False}]])
 
         fig_dew.add_trace(go.Scatter(
             x=full_df["Datetime"], y=full_df["Dew Point"], name="Dew Point",
-            line=dict(color="#a55eea", width=1.5), connectgaps=False,
+            line=dict(color="#E040FB", width=2.0),
             hovertemplate="Dew Point: %{y:.1f} °Cdp<extra></extra>"
         ))
 
         add_max_min_markers(fig_dew, full_df, ["Dew Point"])
-
-        fig_dew.update_layout(
-            height=380, template="plotly_white", hovermode="x unified",
-            margin=dict(l=40, r=40, t=30, b=30),
-            legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
-        )
-        fig_dew.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
-        fig_dew.update_yaxes(title_text="Dew Point [°Cdp]", range=[-100, 10])
+        apply_dark_recorder_style(fig_dew, "Dew Point [°Cdp]", y_range=[-100, 10])
         st.plotly_chart(fig_dew, use_container_width=True)
