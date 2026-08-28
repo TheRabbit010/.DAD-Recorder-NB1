@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # 1. ตั้งค่าหน้าจอ
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
@@ -70,21 +70,20 @@ COLOR_PALETTE = [
 ]
 
 def extract_start_time_from_filename(filename):
-    match = re.search(r'(\d{6})_(\d{6})', filename)
-    if not match:
-        match = re.search(r'(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})', filename)
-
-    if match:
-        if len(match.groups()) == 2:
-            d_str, t_str = match.groups()
-            p1, p2, p3 = int(d_str[:2]), int(d_str[2:4]), int(d_str[4:6])
-            hh, mm, ss = int(t_str[:2]), int(t_str[2:4]), int(t_str[4:6])
-        else:
-            p1, p2, p3, hh, mm, ss = map(int, match.groups())
+    # ค้นหาตัวเลข 6 หลักทั้งหมดที่ถูกคั่นด้วยขีดล่าง (_)
+    matches = re.findall(r'\d{6}', filename)
+    
+    # ดึงเฉพาะ 2 ชุดสุดท้ายเสมอ (เพราะไฟล์คือรหัสเครื่อง_วันที่_เวลา.DAD)
+    if len(matches) >= 2:
+        d_str = matches[-2] # วันที่ เช่น 260813
+        t_str = matches[-1] # เวลา เช่น 070800
+        
+        p1, p2, p3 = int(d_str[:2]), int(d_str[2:4]), int(d_str[4:6])
+        hh, mm, ss = int(t_str[:2]), int(t_str[2:4]), int(t_str[4:6])
             
-        if 20 <= p1 <= 30:  
+        if 20 <= p1 <= 30:  # รูปแบบ YYMMDD (เช่น 26 = 2026)
             year, month, day = 2000 + p1, p2, p3
-        elif 20 <= p3 <= 30: 
+        elif 20 <= p3 <= 30: # รูปแบบ DDMMYY
             day, month, year = p1, p2, 2000 + p3
         else:
             year, month, day = 2000 + p1, p2, p3
@@ -93,6 +92,8 @@ def extract_start_time_from_filename(filename):
             return datetime(year, month, day, hh, mm, ss)
         except ValueError:
             pass
+            
+    # กรณีหาไม่เจอจริงๆ คืนค่าเวลา 08:00 ของวันนี้
     return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
 
 # ==========================================
@@ -127,8 +128,8 @@ if uploaded_files:
 
             df_single = pd.DataFrame(data_dict)
 
+            # ดึงเวลาเริ่มต้นที่แท้จริงจากชื่อไฟล์
             file_start_dt = extract_start_time_from_filename(file.name)
-            # 💡 แก้ไข freq="1S" เป็น freq="1s" เพื่อรองรับ pandas รุ่นใหม่
             time_axis = pd.date_range(start=file_start_dt, periods=total_records, freq="1s")
             df_single.insert(0, "Datetime", time_axis)
             
