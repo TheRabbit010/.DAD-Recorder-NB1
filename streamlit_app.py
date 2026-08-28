@@ -25,11 +25,35 @@ show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Sh
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้างถอดรหัสไบนารี Yokogawa (.DAD) 20 Channels
+# โครงสร้างถอดรหัสและ Mapping ตำแหน่งคอลัมน์ดิบ (Yokogawa .DAD)
 # ==========================================
 HEADER_OFFSET = 512
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"  # Big-Endian Signed Int16
+STRIDE = 90        # ระยะก้าวจำนวนคอลัมน์จริงต่อ 1 จุดเวลา
+
+col_mapping = {
+    1: 4,   # CH01 -> Col E
+    2: 6,   # CH02 -> Col G
+    3: 8,   # CH03 -> Col I
+    4: 10,  # CH04 -> Col K
+    5: 12,  # CH05 -> Col M
+    6: 14,  # CH06 -> Col O
+    7: 16,  # CH07 -> Col Q
+    8: 18,  # CH08 -> Col S
+    9: 20,  # CH09 -> Col U
+    10: 22, # CH10 -> Col W
+    11: 24, # CH11 -> Col Y
+    12: 26, # CH12 -> Col AA
+    13: 28, # CH13 -> Col AC
+    14: 30, # CH14 -> Col AE
+    15: 32, # CH15 -> Col AG (O2 Exit)
+    16: 36, # CH16 -> Col AK (Dryer #1)
+    17: 38, # CH17 -> Col AM (Dryer #2)
+    18: 84, # CH18 -> Col CG (N2 Flow)
+    19: 88, # CH19 -> Col CK (O2 Entrance)
+    20: 86, # CH20 -> Col CI (Dew Point)
+}
 
 ch_info = {
     1: "Z#1 Top",
@@ -74,20 +98,24 @@ if uploaded_files:
             
             # ถอดรหัสสัญญาณไบนารี Big-Endian Int16
             raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
-            
-            # หาร 10.0 เพื่อปรับค่ากลับเป็นทศนิยมจริง
             scaled_signals = raw_signals / SCALE_DIVIDER
 
-            points_per_channel = len(scaled_signals) // num_channels
-            reshaped_data = scaled_signals[:points_per_channel * num_channels].reshape(points_per_channel, num_channels)
+            # ดึงข้อมูลตาม Stride และ Map เข้าคอลัมน์ที่ถูกต้อง
+            total_rows = len(scaled_signals) // STRIDE
+            reshaped_full = scaled_signals[:total_rows * STRIDE].reshape(total_rows, STRIDE)
+
+            extracted_data = np.zeros((total_rows, num_channels))
+            for ch_idx, col_idx in col_mapping.items():
+                if col_idx < STRIDE:
+                    extracted_data[:, ch_idx - 1] = reshaped_full[:, col_idx]
 
             # สร้างแกนเวลา
             time_freq = f"{int(sample_rate_sec * 1000)}ms"
-            time_axis = pd.date_range(start=current_start_datetime, periods=points_per_channel, freq=time_freq)
+            time_axis = pd.date_range(start=current_start_datetime, periods=total_rows, freq=time_freq)
             
             current_start_datetime = time_axis[-1] + pd.Timedelta(seconds=sample_rate_sec)
 
-            df_single = pd.DataFrame(reshaped_data, columns=col_names)
+            df_single = pd.DataFrame(extracted_data, columns=col_names)
             df_single.insert(0, "Datetime", time_axis)
             all_dfs.append(df_single)
 
@@ -97,7 +125,7 @@ if uploaded_files:
     if all_dfs:
         full_df = pd.concat(all_dfs, ignore_index=True)
 
-        # 💡 จัดการตัดเวลาที่ซ้ำกันออกและเรียงลำดับเวลาให้ถูกต้องแม่นยำ
+        # ตัดเวลาที่ซ้ำกันออกและเรียงลำดับเวลา
         full_df = full_df.sort_values(by="Datetime")
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
@@ -142,7 +170,8 @@ if uploaded_files:
             margin=dict(l=40, r=40, t=30, b=30),
             legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
         )
-        fig_top.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        # 💡 ปรับเพิ่ม %S (วินาที) ใน tickformat เพื่อป้องกันปัญหาสเกลเวลาโชว์ซ้ำกัน
+        fig_top.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
         fig_top.update_yaxes(title_text="Temperature [°C]", range=[400, 650])
         st.plotly_chart(fig_top, use_container_width=True)
 
@@ -162,7 +191,7 @@ if uploaded_files:
             margin=dict(l=40, r=40, t=30, b=30),
             legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
         )
-        fig_bot.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        fig_bot.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
         fig_bot.update_yaxes(title_text="Temperature [°C]", range=[400, 650])
         st.plotly_chart(fig_bot, use_container_width=True)
 
@@ -190,7 +219,7 @@ if uploaded_files:
             margin=dict(l=40, r=40, t=30, b=30),
             legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
         )
-        fig_dryer.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        fig_dryer.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
         fig_dryer.update_yaxes(title_text="Temperature [°C]", range=[0, 400])
         st.plotly_chart(fig_dryer, use_container_width=True)
 
@@ -225,7 +254,7 @@ if uploaded_files:
             margin=dict(l=40, r=40, t=30, b=30),
             legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
         )
-        fig_o2_n2.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        fig_o2_n2.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
         fig_o2_n2.update_yaxes(title_text="O2 Level [ppm]", range=[0, 200], secondary_y=False)
         fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True)
         st.plotly_chart(fig_o2_n2, use_container_width=True)
@@ -249,6 +278,6 @@ if uploaded_files:
             margin=dict(l=40, r=40, t=30, b=30),
             legend=dict(x=1.05, y=1, xanchor="left", yanchor="top")
         )
-        fig_dew.update_xaxes(title_text="Date & Time", tickformat="%H:%M\n%b %d, %Y")
+        fig_dew.update_xaxes(title_text="Date & Time", tickformat="%H:%M:%S\n%b %d, %Y")
         fig_dew.update_yaxes(title_text="Dew Point [°Cdp]", range=[-100, 10])
         st.plotly_chart(fig_dew, use_container_width=True)
