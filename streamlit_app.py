@@ -1,148 +1,147 @@
-import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import datetime
+import plotly.express as px
+import streamlit as st
 
-# 1. ตั้งค่าหน้าจอแบบขยายกว้างเต็มตา
-st.set_page_config(layout="wide", page_title="DAD Multi-Zone Visualizer")
+st.set_page_config(page_title="DAD Time-Series Visualizer", layout="wide", page_icon="📈")
 
-st.title("📊 DAD Time-Series Visualizer")
+st.title("📈 DAD Time-Series Visualizer (Auto Encoding & Time)")
+st.write("อัปโหลดไฟล์ `.DAD` โดยระบบจะตรวจจับตัวถอดรหัสภาษา (UTF-8, UTF-16, ANSI) และแปลงเวลาให้อัตโนมัติ")
 
-# ==========================================
-# เมนูด้านข้าง (Sidebar) สำหรับตั้งค่า
-# ==========================================
-st.sidebar.header("⏰ การตั้งค่าเวลา (Time Settings)")
-start_date = st.sidebar.date_input("วันที่เริ่มต้น", pd.to_datetime("today"))
-start_time = st.sidebar.time_input("เวลาเริ่มต้น", pd.to_datetime("08:00").time())
-sample_rate_sec = st.sidebar.number_input("ความถี่ในการบันทึก (วินาที/จุด)", min_value=0.1, value=1.0, step=0.1)
-start_datetime = datetime.combine(start_date, start_time)
+# --- ฟังก์ชันอ่านไฟล์พร้อมสุ่มทดสอบ Encoding หลายรูปแบบ ---
+def load_df_with_auto_encoding(file, sep):
+    # รวม Encoding ยอดนิยมที่มักพบในไฟล์จากเครื่องมือวัดทางวิทยาศาสตร์
+    encodings = ['utf-16', 'utf-16-le', 'utf-16-be', 'utf-8', 'latin1', 'cp1252', 'cp874']
+    for enc in encodings:
+        try:
+            file.seek(0)
+            df = pd.read_csv(file, sep=sep, encoding=enc, engine='python')
+            if not df.empty and len(df.columns) >= 1:
+                return df, enc
+        except Exception:
+            continue
+    raise ValueError("ไม่สามารถอ่านรหัสข้อความได้ (ไฟล์อาจเป็น Binary เฉพาะทาง)")
 
-st.sidebar.divider()
-st.sidebar.header("⚙️ การแสดงผล (Display Options)")
-show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
-show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
+# --- ฟังก์ชันตรวจจับคอลัมน์ วัน/เวลา อัตโนมัติ ---
+def detect_time_column(df):
+    time_keywords = ['date', 'time', 'datetime', 'timestamp', 'เวลา', 'วันที่', 'dt']
+    
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            return col
+            
+    for col in df.columns:
+        if any(kw in str(col).lower() for kw in time_keywords):
+            parsed = pd.to_datetime(df[col], errors='coerce')
+            if parsed.notna().sum() > 0.5 * len(df):
+                return col
+                
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            parsed = pd.to_datetime(df[col], errors='coerce')
+            if parsed.notna().sum() > 0.7 * len(df):
+                return col
+                
+    return df.columns[0]
 
-# ==========================================
-# อัปโหลดไฟล์และประมวลผล
-# ==========================================
-uploaded_files = st.file_uploader("เลือกไฟล์ .DAD / .DAT", type=["dad", "dat"], accept_multiple_files=True)
+# --- Sidebar ตั้งค่าการอ่านไฟล์ ---
+st.sidebar.header("⚙️ ตั้งค่าการอ่านไฟล์")
+delimiter_choice = st.sidebar.selectbox(
+    "ตัวแบ่งข้อมูล (Delimiter)",
+    options=["Space/Tab (อัตโนมัติ)", "Comma (,)", "Tab (\\t)", "Semicolon (;)"],
+    index=0
+)
+sep_map = {
+    "Space/Tab (อัตโนมัติ)": r'\s+',
+    "Comma (,)": ',',
+    "Tab (\\t)": '\t',
+    "Semicolon (;)": ';'
+}
+
+# --- 1. ส่วนอัปโหลดไฟล์ ---
+uploaded_files = st.file_uploader(
+    "เลือกไฟล์ .DAD / .TXT / .CSV",
+    type=["dad", "txt", "dat", "csv"],
+    accept_multiple_files=True
+)
 
 if uploaded_files:
+    df_list = []
+    
     for file in uploaded_files:
         try:
-            binary_data = file.read()
-            raw_signals = np.frombuffer(binary_data, dtype=np.int16, offset=512).astype(float)
-            
-            # ปรับสเกลข้อมูล (หาร 10.0 หากไฟล์ดิบเก็บเป็นทศนิยม 1 ตำแหน่งแบบ Integer)
-            if np.abs(raw_signals).max() > 2000:
-                raw_signals = raw_signals / 10.0
+            temp_df, used_encoding = load_df_with_auto_encoding(file, sep_map[delimiter_choice])
+            temp_df['Source_File'] = file.name
+            df_list.append(temp_df)
+        except Exception as e:
+            st.error(f"ไม่สามารถอ่านไฟล์ **{file.name}**: {e}")
 
-            num_channels = 24
-            points_per_channel = len(raw_signals) // num_channels
-            reshaped_data = raw_signals[:points_per_channel * num_channels].reshape(points_per_channel, num_channels)
+    if df_list:
+        combined_df = pd.concat(df_list, ignore_index=True)
+        all_cols = [c for c in combined_df.columns if c != 'Source_File']
 
-            # ตั้งชื่อคอลัมน์และโซนตามรูปตัวอย่าง
-            col_names = []
-            for i in range(1, 8): col_names.append(f"Top{i} (Z{i})")          # 1-7
-            for i in range(1, 8): col_names.append(f"Bot{i} (Z{i+7})")        # 8-14
-            col_names.extend(["Dryer zone1", "Dryer zone2", "Dryer zone3"])     # 15-17
-            col_names.extend(["N2 Inlet", "N2 Outlet"])                        # 18-19
-            col_names.extend(["O2 Exit", "O2 Entrance", "O2 Zone2"])           # 20-22
-            col_names.extend(["Dew Point 1", "Dew Point 2"])                   # 23-24
+        # --- 2. ค้นหาและกำหนดคอลัมน์เวลาอัตโนมัติ ---
+        detected_col = detect_time_column(combined_df)
+        default_idx = all_cols.index(detected_col) if detected_col in all_cols else 0
 
-            time_freq = f"{int(sample_rate_sec * 1000)}ms"
-            time_axis = pd.date_range(start=start_datetime, periods=points_per_channel, freq=time_freq)
+        st.subheader("🛠️ ตั้งค่าคอลัมน์")
+        col1, col2 = st.columns(2)
 
-            df = pd.DataFrame(reshaped_data, columns=col_names[:num_channels])
-            df.insert(0, "Datetime", time_axis)
-
-            # แยกกลุ่มสัญญาณตามภาพตัวอย่าง
-            top_cols = [c for c in df.columns if c.startswith("Top")]
-            bot_cols = [c for c in df.columns if c.startswith("Bot")]
-            o2_dryer_cols = [c for c in df.columns if any(k in c for k in ["Dryer", "O2", "N2", "Dew"])]
-
-            # สร้าง Subplots ซ้อนกัน 3 ชั้นตามสไตล์รูปภาพ
-            fig = make_subplots(
-                rows=3, cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0.06,
-                subplot_titles=('🌡️ Top Zones', '🌡️ Bottom Zones', '🔥 O2 & Dryer / Process Zones')
+        with col1:
+            time_col = st.selectbox(
+                "คอลัมน์วัน-เวลา (ระบบเลือกให้อัตโนมัติ):",
+                options=all_cols,
+                index=default_idx
             )
 
-            # 1. เพิ่มข้อมูล Top Zones
-            for col in top_cols:
-                fig.add_trace(go.Scatter(
-                    x=df["Datetime"], y=df[col], name=col,
-                    legendgroup="Top Zones", legendgrouptitle_text="Top Zones",
-                    hovertemplate=f"<b>{col}</b>: %{{y:.1f}} °C<extra></extra>"
-                ), row=1, col=1)
+        # แปลงเป็น DateTime และจัดเรียงตามเวลาจริง
+        combined_df[time_col] = pd.to_datetime(combined_df[time_col], errors='coerce')
+        valid_time_df = combined_df.dropna(subset=[time_col]).sort_values(by=time_col).reset_index(drop=True)
 
-            # 2. เพิ่มข้อมูล Bottom Zones
-            for col in bot_cols:
-                fig.add_trace(go.Scatter(
-                    x=df["Datetime"], y=df[col], name=col,
-                    legendgroup="Bottom Zones", legendgrouptitle_text="Bottom Zones",
-                    hovertemplate=f"<b>{col}</b>: %{{y:.1f}} °C<extra></extra>"
-                ), row=2, col=1)
+        with col2:
+            signal_cols = st.multiselect(
+                "เลือกคอลัมน์ค่าสัญญาณ (Y-Axis):",
+                options=[c for c in all_cols if c != time_col],
+                default=[c for c in all_cols if c != time_col][:1]
+            )
 
-            # 3. เพิ่มข้อมูล O2 & Dryer / อื่นๆ
-            for col in o2_dryer_cols:
-                fig.add_trace(go.Scatter(
-                    x=df["Datetime"], y=df[col], name=col,
-                    legendgroup="O2 & Dryer", legendgrouptitle_text="O2 & Dryer",
-                    hovertemplate=f"<b>{col}</b>: %{{y:.1f}}<extra></extra>"
-                ), row=3, col=1)
+        if not valid_time_df.empty:
+            start_time = valid_time_df[time_col].min().strftime('%Y-%m-%d %H:%M:%S')
+            end_time = valid_time_df[time_col].max().strftime('%Y-%m-%d %H:%M:%S')
+            st.success(f"📌 ช่วงเวลาจริง: **{start_time}** ถึง **{end_time}** (รวม {len(valid_time_df)} จุดข้อมูล)")
+        else:
+            st.error("ไม่สามารถแปลงข้อมูลในคอลัมน์ที่เลือกให้เป็นวัน/เวลาได้ โปรดเลือกคอลัมน์อื่น")
 
-            # เพิ่มมาร์กเกอร์ Max / Min ในกรณีที่มีการติ๊กเลือก
-            if show_max or show_min:
-                all_signal_cols = top_cols + bot_cols + o2_dryer_cols
-                for col in all_signal_cols:
-                    r = 1 if col in top_cols else (2 if col in bot_cols else 3)
-                    if show_max:
-                        max_idx = df[col].idxmax()
-                        fig.add_trace(go.Scatter(
-                            x=[df.loc[max_idx, "Datetime"]], y=[df.loc[max_idx, col]],
-                            mode="markers+text", marker=dict(color="red", size=8, symbol="triangle-up"),
-                            text=[f"Max: {df.loc[max_idx, col]:.1f}"], textposition="top center",
-                            showlegend=False, hoverinfo="skip"
-                        ), row=r, col=1)
-                    if show_min:
-                        min_idx = df[col].idxmin()
-                        fig.add_trace(go.Scatter(
-                            x=[df.loc[min_idx, "Datetime"]], y=[df.loc[min_idx, col]],
-                            mode="markers+text", marker=dict(color="blue", size=8, symbol="triangle-down"),
-                            text=[f"Min: {df.loc[min_idx, col]:.1f}"], textposition="bottom center",
-                            showlegend=False, hoverinfo="skip"
-                        ), row=r, col=1)
+        # --- 3. แสดง Interactive Graph ---
+        if signal_cols and not valid_time_df.empty:
+            st.subheader("📊 Interactive Time-Series Graph")
 
-            # ตกแต่ง Layout ให้เหมือนตัวอย่าง
+            fig = px.line(
+                valid_time_df,
+                x=time_col,
+                y=signal_cols,
+                color='Source_File' if len(signal_cols) == 1 else None,
+                title="กราฟแสดงค่าสัญญาณตามลำดับเวลาจริง",
+                labels={time_col: "วัน-เวลา", "value": "ค่าสัญญาณ"}
+            )
+
             fig.update_layout(
-                height=900,
-                template="plotly_white",
                 hovermode="x unified",
-                legend=dict(
-                    groupclick="toggleitem",
-                    orientation="v",
-                    x=1.01, y=1,
-                    xanchor="left", yanchor="top"
-                ),
-                margin=dict(l=50, r=160, t=50, b=40)
-            )
-
-            # ตั้งค่าเส้นประแนวดิ่ง (Spike Line) และการแสดงผลแกน X
-            fig.update_xaxes(
-                showspikes=True,
-                spikecolor="black",
-                spikesnap="cursor",
-                spikemode="across",
-                spikedash="dash",
-                spikethickness=1,
-                tickformat="%H:%M, %d/%m"
+                height=600,
+                xaxis=dict(
+                    type="date",
+                    rangeslider=dict(visible=True)
+                )
             )
 
             st.plotly_chart(fig, use_container_width=True)
 
-        except Exception as e:
-            st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์ {file.name}: {e}")
+        # --- 4. ปุ่มดาวน์โหลดข้อมูล ---
+        with st.expander("📄 ตารางข้อมูลที่รวมและเรียงตามเวลาแล้ว"):
+            st.dataframe(valid_time_df)
+            csv_data = valid_time_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="ดาวน์โหลด Combined CSV",
+                data=csv_data,
+                file_name="combined_time_data.csv",
+                mime="text/csv"
+            )
