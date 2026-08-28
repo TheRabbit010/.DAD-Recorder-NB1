@@ -26,7 +26,7 @@ show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Sh
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้าง Mapping ตามไฟล์จริง
+# โครงสร้าง Mapping ตามไฟล์จริง (20 Channels)
 # ==========================================
 col_mapping = {
     1: 4,   # CH01 -> Z#1 Top
@@ -158,39 +158,35 @@ if uploaded_files:
         num_files_str = f"({len(sorted_files)} Files)"
 
         # ==========================================
-        # 📥 สร้างไฟล์ Excel รวมทุกกราฟ
+        # 📥 สร้างไฟล์ Excel รวมทุกชีท
         # ==========================================
         excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            # ชีท 1: ข้อมูลทั้งหมด
-            full_df.to_excel(writer, sheet_name='All Data', index=False)
-            # ชีท 2: Top Zones
-            full_df[['Datetime'] + top_names].to_excel(writer, sheet_name='Top Zones', index=False)
-            # ชีท 3: Bottom Zones
-            full_df[['Datetime'] + bot_names].to_excel(writer, sheet_name='Bottom Zones', index=False)
-            # ชีท 4: Dryer
-            full_df[['Datetime', 'Dryer #1', 'Dryer #2']].to_excel(writer, sheet_name='Dryer', index=False)
-            # ชีท 5: O2 & N2 Flow
-            full_df[['Datetime', 'O2 Exit', 'O2 Entrance', 'N2 Flow']].to_excel(writer, sheet_name='O2 & N2 Flow', index=False)
-            # ชีท 6: Dew Point
-            full_df[['Datetime', 'Dew Point']].to_excel(writer, sheet_name='Dew Point', index=False)
+        try:
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                full_df.to_excel(writer, sheet_name='All Data', index=False)
+                full_df[['Datetime'] + top_names].to_excel(writer, sheet_name='Top Zones', index=False)
+                full_df[['Datetime'] + bot_names].to_excel(writer, sheet_name='Bottom Zones', index=False)
+                full_df[['Datetime', 'Dryer #1', 'Dryer #2']].to_excel(writer, sheet_name='Dryer', index=False)
+                full_df[['Datetime', 'O2 Exit', 'O2 Entrance', 'N2 Flow']].to_excel(writer, sheet_name='O2 & N2 Flow', index=False)
+                full_df[['Datetime', 'Dew Point']].to_excel(writer, sheet_name='Dew Point', index=False)
 
-        excel_data = excel_buffer.getvalue()
+            excel_data = excel_buffer.getvalue()
 
-        # ปุ่มดาวน์โหลด Excel และตารางแสดงข้อมูล
-        col_btn, col_exp = st.columns([1, 4])
-        with col_btn:
-            st.download_button(
-                label="📥 ดาวน์โหลดข้อมูลเป็น Excel (.xlsx)",
-                data=excel_data,
-                file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-        
-        with col_exp:
-            with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
-                st.dataframe(full_df.head(100), use_container_width=True)
+            col_btn, col_exp = st.columns([1, 4])
+            with col_btn:
+                st.download_button(
+                    label="📥 ดาวน์โหลดข้อมูลเป็น Excel (.xlsx)",
+                    data=excel_data,
+                    file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
+            with col_exp:
+                with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
+                    st.dataframe(full_df.head(100), use_container_width=True)
+        except ModuleNotFoundError:
+            st.warning("⚠️ กรุณาเพิ่ม `openpyxl` ลงในไฟล์ `requirements.txt` บน GitHub เพื่อเปิดใช้งานปุ่มดาวน์โหลดไฟล์ Excel")
 
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
             fig.update_layout(
