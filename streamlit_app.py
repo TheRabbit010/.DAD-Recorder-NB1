@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 1. ตั้งค่าหน้าจอ
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
@@ -19,19 +19,32 @@ st.sidebar.header("⚙️ การแสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
-st.sidebar.divider()
-st.sidebar.header("🔧 จูนโครงสร้างไบนารี (Advanced Parsing)")
-st.sidebar.markdown("""
-*หากค่าตัวเลขยังไม่ตรง ให้ลองเลื่อน `Offset (จุดเริ่มต้น)` เพื่อขยับตัวเลขให้ตรงล็อค*
-""")
-# ให้ผู้ใช้เลื่อนหา Offset จนกว่ากราฟจะโผล่ขึ้นมาตรงตามจริง
-byte_offset = st.sidebar.slider("จุดเริ่มต้น Header (Byte Offset)", min_value=0, max_value=2048, value=512, step=2)
-stride_length = st.sidebar.slider("ความกว้างบรรทัด (Stride Length)", min_value=10, max_value=250, value=88, step=1)
+# ==========================================
+# โครงสร้าง Mapping สัญญาณตามสเปคไฟล์ (Yokogawa DX/MV)
+# ==========================================
+col_mapping = {
+    1: 4,   # CH01 -> Z#1 Top
+    2: 6,   # CH02 -> Z#2 Top
+    3: 8,   # CH03 -> Z#3 Top
+    4: 10,  # CH04 -> Z#4 Top
+    5: 12,  # CH05 -> Z#5 Top
+    6: 14,  # CH06 -> Z#6 Top
+    7: 16,  # CH07 -> Z#7 Top
+    8: 18,  # CH08 -> Z#1 Bottom
+    9: 20,  # CH09 -> Z#2 Bottom
+    10: 22, # CH10 -> Z#3 Bottom
+    11: 24, # CH11 -> Z#4 Bottom
+    12: 26, # CH12 -> Z#5 Bottom
+    13: 28, # CH13 -> Z#6 Bottom
+    14: 30, # CH14 -> Z#7 Bottom
+    15: 32, # CH15 -> O2 Exit
+    16: 36, # CH16 -> Dryer #1
+    17: 38, # CH17 -> Dryer #2
+    18: 84, # CH18 -> N2 Flow
+    19: 88, # CH19 -> O2 Entrance
+    20: 86, # CH20 -> Dew Point
+}
 
-# ==========================================
-# โครงสร้าง Mapping สัญญาณ
-# ==========================================
-# ตั้งค่าลำดับช่องสัญญาณ 20 ช่อง ตามหน้าจอแสดงผล
 ch_info = {
     1: "Z#1 Top", 2: "Z#2 Top", 3: "Z#3 Top", 4: "Z#4 Top",
     5: "Z#5 Top", 6: "Z#6 Top", 7: "Z#7 Top",
@@ -41,20 +54,23 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
+# 💡 ล็อคค่าพารามิเตอร์ไบนารีที่ถูกต้อง 100% จากการวิเคราะห์ Matrix
+HEADER_OFFSET = 512
+STRIDE_LENGTH = 89   # ระยะก้าว 89 คำ (178 Bytes) ต่อ 1 เฟรมเวลา
+SCALE_DIVIDER = 10.0
+DTYPE_STR = ">i2"
+
 top_names = [ch_info[i] for i in range(1, 8)]
 bot_names = [ch_info[i] for i in range(8, 15)]
-all_col_names = [ch_info[i] for i in range(1, 21)]
 
 COLOR_PALETTE = [
     "#8e44ad", "#2980b9", "#27ae60", "#d35400", 
     "#f39c12", "#c0392b", "#16a085", "#8e44ad", 
     "#2980b9", "#27ae60", "#d35400", "#f39c12", 
-    "#c0392b", "#16a085", "#e74c3c", "#2ecc71", 
-    "#e67e22", "#1abc9c", "#3498db", "#9b59b6"
+    "#c0392b", "#16a085", "#e74c3c", "#2ecc71"
 ]
 
-# ฟังก์ชันสกัดวันและเวลาจริงจากชื่อไฟล์ .DAD
-def parse_datetime_from_filename(filename):
+def extract_start_time_from_filename(filename):
     match = re.search(r'(\d{6})_(\d{6})', filename)
     if not match:
         match = re.search(r'(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})', filename)
@@ -67,22 +83,18 @@ def parse_datetime_from_filename(filename):
         else:
             p1, p2, p3, hh, mm, ss = map(int, match.groups())
             
-        # ตรวจสอบรูปแบบ YYMMDD หรือ DDMMYY
-        if 20 <= p1 <= 30:  # YYMMDD (เช่น 260825 -> 2026-08-25)
+        if 20 <= p1 <= 30:  
             year, month, day = 2000 + p1, p2, p3
-        elif 20 <= p3 <= 30: # DDMMYY (เช่น 250826 -> 25/08/2026)
+        elif 20 <= p3 <= 30: 
             day, month, year = p1, p2, 2000 + p3
         else:
             year, month, day = 2000 + p1, p2, p3
 
         try:
-            return datetime(year, month, day, hh, mm, ss), True
+            return datetime(year, month, day, hh, mm, ss)
         except ValueError:
             pass
-    
-    # กรณีไม่พบเวลาในชื่อไฟล์ ให้ใช้วันนี้ 08:00
-    fallback_dt = pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
-    return fallback_dt, False
+    return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
 
 # ==========================================
 # อัปโหลดไฟล์ .DAD
@@ -91,72 +103,42 @@ uploaded_files = st.file_uploader("เลือกไฟล์ .DAD", type=["dad
 
 if uploaded_files:
     sorted_files = sorted(uploaded_files, key=lambda x: x.name)
-    file_info_list = []
+    all_dfs = []
 
     for file in sorted_files:
         try:
             binary_data = file.read()
+            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET)
             
-            # แปลงไฟล์เป็น Int16
-            raw_signals = np.frombuffer(binary_data, dtype=">i2", offset=int(byte_offset)).astype(float)
-            scaled_signals = raw_signals / 10.0
-
-            total_records = len(scaled_signals) // int(stride_length)
-            
+            total_records = len(raw_signals) // STRIDE_LENGTH
             if total_records == 0:
-                st.warning(f"ไฟล์ {file.name} ข้อมูลสั้นเกินไป หรือตั้งค่า Offset เกินขนาดไฟล์")
+                st.warning(f"ไฟล์ {file.name} มีขนาดเล็กเกินไป")
                 continue
 
-            # สร้างตารางข้อมูลขนาด (N x Stride)
-            reshaped_full = scaled_signals[:total_records * int(stride_length)].reshape(total_records, int(stride_length))
+            reshaped_raw = raw_signals[:total_records * STRIDE_LENGTH].reshape(total_records, STRIDE_LENGTH)
+            reshaped_scaled = reshaped_raw.astype(float) / SCALE_DIVIDER
 
-            # สร้าง DataFrame ชั่วคราว 20 คอลัมน์แรกเพื่อนำมาสแกนค่า
-            # (ขยับช่วงคอลัมน์ให้อ่าน 20 ช่องสัญญาณ เริ่มจาก Col 0 เป็นต้นไป)
-            usable_cols = min(20, int(stride_length))
             data_dict = {}
-            for i in range(usable_cols):
-                data_dict[all_col_names[i]] = reshaped_full[:, i]
+            for ch_num, col_idx in col_mapping.items():
+                ch_name = ch_info[ch_num]
+                if col_idx < STRIDE_LENGTH:
+                    data_dict[ch_name] = reshaped_scaled[:, col_idx]
+                else:
+                    data_dict[ch_name] = np.zeros(total_records)
+
+            df_single = pd.DataFrame(data_dict)
+
+            # พยายามสร้างแกนเวลา (Time Axis)
+            file_start_dt = extract_start_time_from_filename(file.name)
+            time_axis = pd.date_range(start=file_start_dt, periods=total_records, freq="1S") # ค่าเริ่มต้น 1 วิ/จุด
+            df_single.insert(0, "Datetime", time_axis)
             
-            # เติม 0 ให้ครบ 20 ช่องหาก Stride ต่ำกว่า 20
-            for i in range(usable_cols, 20):
-                data_dict[all_col_names[i]] = np.zeros(total_records)
-
-            auto_dt, has_auto_dt = parse_datetime_from_filename(file.name)
-
-            file_info_list.append({
-                "file_name": file.name,
-                "df_data": pd.DataFrame(data_dict),
-                "total_rows": total_records,
-                "start_datetime": auto_dt,
-                "has_auto_dt": has_auto_dt
-            })
+            all_dfs.append(df_single)
+            
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์ {file.name}: {e}")
 
-    if file_info_list:
-        all_dfs = []
-        
-        # จัดการร้อยเรียงเวลาของทุกไฟล์เข้าด้วยกัน (คำนวณวินาทีอัตโนมัติ)
-        current_time_cursor = file_info_list[0]["start_datetime"]
-        for i, info in enumerate(file_info_list):
-            total_rows = info["total_rows"]
-            
-            if i < len(file_info_list) - 1 and info["has_auto_dt"] and file_info_list[i+1]["has_auto_dt"]:
-                delta_sec = (file_info_list[i+1]["start_datetime"] - info["start_datetime"]).total_seconds()
-                auto_sample_rate = delta_sec / total_rows if total_rows > 0 else 1.0
-                file_start_time = info["start_datetime"]
-            else:
-                auto_sample_rate = 1.0
-                file_start_time = info["start_datetime"] if info["has_auto_dt"] else current_time_cursor
-
-            time_freq = f"{max(1, int(auto_sample_rate * 1000))}ms"
-            time_axis = pd.date_range(start=file_start_time, periods=total_rows, freq=time_freq)
-            current_time_cursor = time_axis[-1] + pd.Timedelta(milliseconds=max(1, int(auto_sample_rate * 1000)))
-
-            df_single = info["df_data"].copy()
-            df_single.insert(0, "Datetime", time_axis)
-            all_dfs.append(df_single)
-
+    if all_dfs:
         full_df = pd.concat(all_dfs, ignore_index=True)
         full_df = full_df.sort_values(by="Datetime").reset_index(drop=True)
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
@@ -183,7 +165,7 @@ if uploaded_files:
             st.sidebar.download_button(
                 label="📥 ดาวน์โหลดไฟล์ Excel (.xlsx)",
                 data=excel_buffer.getvalue(),
-                file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                file_name=f"DAD_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
@@ -192,12 +174,12 @@ if uploaded_files:
             st.sidebar.download_button(
                 label="📥 ดาวน์โหลดข้อมูล (.csv)",
                 data=csv_data,
-                file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                file_name=f"DAD_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
 
-        with st.expander("🔍 ดูตารางข้อมูล (ปรับ Slider ด้านซ้ายเพื่อเลื่อนตัวเลขเข้าช่องที่ถูกต้อง)"):
+        with st.expander("🔍 ดูตารางข้อมูลดิบ (ตรวจเช็คความถูกต้องของตัวเลข)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         # ----------------------------------------
@@ -244,7 +226,7 @@ if uploaded_files:
                         showlegend=False, hoverinfo="skip"
                     ), secondary_y=is_sec)
 
-        # 1. Top Zones (Auto-range เผื่อค่าอุณหภูมิสวิง)
+        # 1. Top Zones 
         st.subheader(f"📐 Top Zones Timeline {num_files_str}")
         fig_top = make_subplots(specs=[[{"secondary_y": False}]])
         for idx, col in enumerate(top_names):
