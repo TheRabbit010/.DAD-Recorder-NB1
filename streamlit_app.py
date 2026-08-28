@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # 1. ตั้งค่าหน้าจอ
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
@@ -15,19 +15,18 @@ st.title("📊 DAD Time-Series Visualizer")
 # ==========================================
 # แถบตั้งค่าด้านข้าง (Sidebar)
 # ==========================================
+st.sidebar.header("⏱️ ตั้งค่าเวลา (Time Settings)")
+st.sidebar.markdown("หากเวลาในกราฟไปไม่ถึงจุดสิ้นสุด ให้ปรับความถี่ให้ตรงกับค่า Setting ของเครื่องบันทึก")
+sample_rate = st.sidebar.number_input("ความถี่การบันทึก (วินาที/จุด)", min_value=1, max_value=3600, value=1, step=1)
+
+st.sidebar.divider()
 st.sidebar.header("⚙️ การแสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้างไบนารีของเครื่อง Yokogawa (176 Bytes / 88 Words)
+# โครงสร้าง Mapping สัญญาณตาม Header จริง
 # ==========================================
-HEADER_OFFSET = 512
-STRIDE_WORDS = 88    # 88 คำ = 176 ไบต์ ต่อ 1 บรรทัดเวลา
-SCALE_DIVIDER = 10.0
-DTYPE_STR = ">i2"
-
-# ดัชนีคอลัมน์ (นับเป็นหน่วย Word) ของแต่ละแชนเนล
 col_mapping = {
     1: 4,   # Z#1 Top
     2: 6,   # Z#2 Top
@@ -60,8 +59,12 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
+all_col_names = [ch_info[i] for i in range(1, 21)]
 top_names = [ch_info[i] for i in range(1, 8)]
 bot_names = [ch_info[i] for i in range(8, 15)]
+
+SCALE_DIVIDER = 10.0
+STRIDE = 90  # จำนวนช่องทั้งหมดต่อ 1 Block
 
 COLOR_PALETTE = [
     "#8e44ad", "#2980b9", "#27ae60", "#d35400", 
@@ -69,23 +72,6 @@ COLOR_PALETTE = [
     "#2980b9", "#27ae60", "#d35400", "#f39c12", 
     "#c0392b", "#16a085", "#e74c3c", "#2ecc71"
 ]
-
-# ถอดรหัสเวลา BCD Timestamp (6 ไบต์แรกของแต่ละบรรทัด)
-def decode_bcd_timestamp(byte_arr):
-    try:
-        y = ((byte_arr[0] >> 4) * 10) + (byte_arr[0] & 0x0F)
-        m = ((byte_arr[1] >> 4) * 10) + (byte_arr[1] & 0x0F)
-        d = ((byte_arr[2] >> 4) * 10) + (byte_arr[2] & 0x0F)
-        hh = ((byte_arr[3] >> 4) * 10) + (byte_arr[3] & 0x0F)
-        mm = ((byte_arr[4] >> 4) * 10) + (byte_arr[4] & 0x0F)
-        ss = ((byte_arr[5] >> 4) * 10) + (byte_arr[5] & 0x0F)
-        
-        # ตรวจสอบความถูกต้องของปฏิทิน
-        if 20 <= y <= 35 and 1 <= m <= 12 and 1 <= d <= 31 and 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59:
-            return datetime(2000 + y, m, d, hh, mm, ss)
-    except Exception:
-        pass
-    return None
 
 def extract_start_time_from_filename(filename):
     matches = re.findall(r'\d{6}', filename)
@@ -107,7 +93,6 @@ def extract_start_time_from_filename(filename):
             return datetime(year, month, day, hh, mm, ss)
         except ValueError:
             pass
-            
     return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
 
 # ==========================================
@@ -122,58 +107,52 @@ if uploaded_files:
     for file in sorted_files:
         try:
             binary_data = file.read()
-            buf = binary_data[HEADER_OFFSET:]
-            record_size_bytes = STRIDE_WORDS * 2
-            total_records = len(buf) // record_size_bytes
+            # 1. แปลงไฟล์ทั้งก้อนให้เป็น Array ของ Int16
+            file_words = np.frombuffer(binary_data, dtype='>i2')
+            total_words = len(file_words)
             
-            if total_records == 0:
-                st.warning(f"ไฟล์ {file.name} มีขนาดเล็กเกินไป")
+            records = []
+            
+            # 2. ระบบสแกนหาจุดเชื่อมข้อมูล (Sync-Hunting Algorithm)
+            i = 256  # ข้าม Header ส่วนแรก
+            while i < total_words - STRIDE:
+                # ดึงกลุ่มตัวอย่างอุณหภูมิ 7 โซนบนมาตรวจสอบ (Z1 ถึง Z7)
+                z_vals = file_words[i+4 : i+17 : 2]
+                
+                # เช็คว่าเป็นตัวเลขความร้อนปกติหรือไม่ (-50°C ถึง 1500°C)
+                valid_count = np.sum((z_vals > -500) & (z_vals < 15000))
+                
+                if valid_count >= 4:
+                    # ✅ พบ Block ข้อมูลที่ถูกต้อง ดึงค่าออกมา 20 ช่อง
+                    record_data = []
+                    for ch_num, col_idx in col_mapping.items():
+                        val = file_words[i + col_idx] / SCALE_DIVIDER
+                        # กรอง Error Code ของ Yokogawa (เช่น -3276.8) ให้เป็นช่องว่าง
+                        if val < -1000.0 or val > 3000.0:
+                            val = np.nan
+                        record_data.append(val)
+                    
+                    records.append(record_data)
+                    i += STRIDE  # กระโดดข้ามไปตรวจสอบ Block ถัดไป
+                else:
+                    # ❌ เจอ Block Header หรือขยะ ให้เลื่อนเดินหน้าทีละ 1 Word จนกว่าจะเจอข้อมูลจริง
+                    i += 1
+
+            if len(records) == 0:
+                st.warning(f"ไฟล์ {file.name} ไม่พบโครงสร้างข้อมูลที่ถูกต้อง")
                 continue
 
-            timestamps = []
-            data_dict = {ch_info[ch]: np.zeros(total_records) for ch in range(1, 21)}
+            df_single = pd.DataFrame(records, columns=all_col_names)
             
-            fallback_dt = extract_start_time_from_filename(file.name)
-            last_valid_ts = fallback_dt
-
-            for r in range(total_records):
-                rec_raw = buf[r*record_size_bytes : (r+1)*record_size_bytes]
-                
-                # 1. ถอดรหัสเวลาจริงประจำบรรทัด (Real hardware timestamp)
-                ts = decode_bcd_timestamp(rec_raw[:6])
-                if ts is not None:
-                    timestamps.append(ts)
-                    last_valid_ts = ts
-                else:
-                    # ถ้าเกิด error ควรอิงตามวินาทีถัดไป
-                    if len(timestamps) > 0:
-                        last_valid_ts = last_valid_ts + timedelta(seconds=1)
-                        timestamps.append(last_valid_ts)
-                    else:
-                        timestamps.append(fallback_dt)
-
-                # 2. ถอดรหัสข้อมูลช่องสัญญาณ
-                rec_words = np.frombuffer(rec_raw, dtype='>i2').astype(float) / SCALE_DIVIDER
-                
-                for ch_num, col_idx in col_mapping.items():
-                    ch_name = ch_info[ch_num]
-                    if col_idx < len(rec_words):
-                        val = rec_words[col_idx]
-                        # กรองค่าขยะหรือ Error Code เครื่องบันทึก
-                        if val < -500.0 or val > 3500.0:
-                            data_dict[ch_name][r] = np.nan
-                        else:
-                            data_dict[ch_name][r] = val
-                    else:
-                        data_dict[ch_name][r] = np.nan
-
-            df_single = pd.DataFrame(data_dict)
-            df_single.insert(0, "Datetime", timestamps)
-            
-            # เชื่อมจุดข้อมูลที่หายไป (Interpolate) เพื่อให้กราฟสมูท
-            for col in df_single.columns[1:]:
+            # เติมจุดเชื่อมข้อมูลที่หายไปจากการกรอง Error ให้เส้นกราฟสมูท
+            for col in df_single.columns:
                 df_single[col] = df_single[col].interpolate(method='linear').ffill().bfill()
                 
+            # สร้างแกนเวลาให้ตรงตามความถี่การบันทึก (วินาที/จุด)
+            start_dt = extract_start_time_from_filename(file.name)
+            time_axis = pd.date_range(start=start_dt, periods=len(df_single), freq=f"{int(sample_rate)}s")
+            df_single.insert(0, "Datetime", time_axis)
+            
             all_dfs.append(df_single)
             
         except Exception as e:
@@ -220,7 +199,7 @@ if uploaded_files:
                 use_container_width=True
             )
 
-        with st.expander("🔍 ดูตารางข้อมูลดิบ (ค่าตัวเลขและเวลาควรตรง 100% แล้ว)"):
+        with st.expander("🔍 ดูตารางข้อมูลดิบ (ล็อกคอลัมน์เป๊ะทุกบรรทัดแล้ว)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         # ----------------------------------------
