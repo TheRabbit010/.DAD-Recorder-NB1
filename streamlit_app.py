@@ -20,7 +20,7 @@ show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Sh
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้าง Mapping สัญญาณตามสเปคไฟล์ (Yokogawa DX/MV)
+# โครงสร้าง Mapping สัญญาณ (Yokogawa DX/MV 180-Byte Record)
 # ==========================================
 col_mapping = {
     1: 4,   # CH01 -> Z#1 Top
@@ -55,7 +55,8 @@ ch_info = {
 }
 
 POSSIBLE_HEADER_OFFSETS = [512, 1024, 256, 0]
-POSSIBLE_RECORD_SIZES = [178, 180, 176, 184, 90, 88]
+# จัดลำดับ 180 ไบต์ (90 คำ) เป็นตัวเลือกหลักอันดับ 1
+POSSIBLE_RECORD_SIZES = [180, 178, 182, 176, 184, 192, 90, 88]
 SCALE_DIVIDER = 10.0
 
 top_names = [ch_info[i] for i in range(1, 8)]
@@ -68,7 +69,6 @@ COLOR_PALETTE = [
     "#c0392b", "#16a085", "#e74c3c", "#2ecc71"
 ]
 
-# 💡 ถอดรหัสเวลาฝัง BCD Timestamp จากแต่ละ Record ในไฟล์ไบนารี
 def decode_bcd_timestamp(byte_arr):
     try:
         y = ((byte_arr[0] >> 4) * 10) + (byte_arr[0] & 0x0F)
@@ -107,66 +107,84 @@ def extract_start_time_from_filename(filename):
             
     return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
 
-# ฟังก์ชันถอดรหัสแบบสแกน Record-by-Record
+# ฟังก์ชันคำนวณและตรวจสอบความสม่ำเสมอของลำดับเวลา (Stability Scanner)
 def parse_dad_binary_file(file_bytes, filename):
     best_offset = 512
-    best_rsize = 178
-    best_valid_cnt = -1
-    
-    # 1. ค้นหา Offset และขนาด Record ที่ถูกต้องที่สุด
+    best_rsize = 180
+    max_consecutive_steps = -1
+    detected_step_sec = 1.0
+
+    # 1. สแกนหา Offset และ Record Size ที่ถูกต้องที่สุดด้วยความสม่ำเสมอของช่วงเวลา
     for offset in POSSIBLE_HEADER_OFFSETS:
         buf = file_bytes[offset:]
-        if len(buf) < 178:
+        if len(buf) < 360:
             continue
         for rsize in POSSIBLE_RECORD_SIZES:
             total_recs = len(buf) // rsize
-            if total_recs == 0:
+            if total_recs < 3:
                 continue
-            
-            valid_cnt = 0
-            for r in range(min(total_recs, 40)):
+
+            consecutive_valid = 0
+            prev_dt = None
+            step_sec = None
+
+            for r in range(min(total_recs, 50)):
                 rec_bytes = buf[r*rsize : r*rsize + 6]
-                if decode_bcd_timestamp(rec_bytes) is not None:
-                    valid_cnt += 1
-            
-            if valid_cnt > best_valid_cnt:
-                best_valid_cnt = valid_cnt
+                curr_dt = decode_bcd_timestamp(rec_bytes)
+
+                if curr_dt is not None:
+                    if prev_dt is not None:
+                        diff = (curr_dt - prev_dt).total_seconds()
+                        if step_sec is None and 0 < diff <= 3600:
+                            step_sec = diff
+                            consecutive_valid += 1
+                        elif step_sec is not None and diff == step_sec:
+                            consecutive_valid += 1
+                        else:
+                            break
+                    else:
+                        consecutive_valid += 1
+                    prev_dt = curr_dt
+                else:
+                    break
+
+            if consecutive_valid > max_consecutive_steps:
+                max_consecutive_steps = consecutive_valid
                 best_offset = offset
                 best_rsize = rsize
+                if step_sec:
+                    detected_step_sec = step_sec
 
-    # 2. ถอดรหัสวันที่ เวลา และสัญญาณตามโครงสร้าง Record จริง
+    # 2. ถอดรหัสไฟล์ตามโครงสร้าง Record จริง
     buf = file_bytes[best_offset:]
     total_records = len(buf) // best_rsize
-    
+
     timestamps = []
     data_dict = {ch_info[ch]: np.zeros(total_records) for ch in range(1, 21)}
     fallback_dt = extract_start_time_from_filename(filename)
     last_valid_ts = fallback_dt
-    
+
     for r in range(total_records):
         rec_raw = buf[r*best_rsize : (r+1)*best_rsize]
-        
-        # ถอดรหัส BCD Timestamp ประจำบรรทัด
+
         ts = decode_bcd_timestamp(rec_raw[:6])
         if ts is not None:
             timestamps.append(ts)
             last_valid_ts = ts
         else:
             if len(timestamps) > 0:
-                last_valid_ts = last_valid_ts + timedelta(seconds=1)
+                last_valid_ts = last_valid_ts + timedelta(seconds=detected_step_sec)
                 timestamps.append(last_valid_ts)
             else:
                 timestamps.append(fallback_dt)
-                
-        # ถอดรหัสค่าช่องสัญญาณ (Int16 Big-Endian)
+
         words_in_rec = best_rsize // 2
         rec_words = np.frombuffer(rec_raw[:words_in_rec*2], dtype='>i2').astype(float) / SCALE_DIVIDER
-        
+
         for ch_num, col_idx in col_mapping.items():
             ch_name = ch_info[ch_num]
             if col_idx < len(rec_words):
                 val = rec_words[col_idx]
-                # กรองค่ารหัสสถานะความผิดปกติ (Error Flags / Status Overrange) ออก
                 if val < -500.0 or val > 3500.0:
                     data_dict[ch_name][r] = np.nan
                 else:
@@ -175,11 +193,10 @@ def parse_dad_binary_file(file_bytes, filename):
                 data_dict[ch_name][r] = np.nan
 
     df = pd.DataFrame(data_dict)
-    
-    # เติมค่าเชื่อมจุดที่หายไปจากการกรอง Error Flag
+
     for col in df.columns:
         df[col] = df[col].interpolate(method='linear').ffill().bfill()
-        
+
     df.insert(0, "Datetime", timestamps)
     return df
 
