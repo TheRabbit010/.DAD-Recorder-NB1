@@ -5,9 +5,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# 1. ตั้งค่าหน้าจอแบบกว้าง
+# 1. ตั้งค่าหน้าจอ
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
 
 st.title("📊 DAD Time-Series Visualizer")
@@ -15,17 +15,25 @@ st.title("📊 DAD Time-Series Visualizer")
 # ==========================================
 # แถบตั้งค่าด้านข้าง (Sidebar)
 # ==========================================
+st.sidebar.header("⏰ ตั้งค่าเวลาสำรอง (Fallback Time)")
+start_date = st.sidebar.date_input("วันที่เริ่มต้น", pd.to_datetime("today"))
+start_time = st.sidebar.time_input("เวลาเริ่มต้น", pd.to_datetime("08:00").time())
+fallback_start_datetime = datetime.combine(start_date, start_time)
+
+st.sidebar.divider()
+st.sidebar.header("🔧 การจัดตำแหน่งแชนเนล (Stride Calibration)")
+use_auto_stride = st.sidebar.checkbox("⚡ คำนวณ Stride อัตโนมัติ (Auto-Detect)", value=True)
+manual_stride = st.sidebar.number_input(
+    "ระยะก้าวคอลัมน์ (Stride)", 
+    min_value=50, max_value=150, value=88, step=1,
+    help="หากค่าตัวเลขในตารางเฉียงทแยงมุม ให้ลองปรับลด/เพิ่มค่านี้ทีละ 1 หรือ 2"
+)
+header_offset = st.sidebar.number_input("Header Offset (Bytes)", min_value=0, max_value=2048, value=512, step=64)
+
+st.sidebar.divider()
 st.sidebar.header("⚙️ การแสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
-
-st.sidebar.divider()
-st.sidebar.header("⏰ ปรับแต่งวัน-เวลาสำรอง (Manual Time Override)")
-override_time = st.sidebar.checkbox("ปรับแต่งเวลาเริ่มต้นเอง", value=False)
-if override_time:
-    manual_date = st.sidebar.date_input("วันที่เริ่มต้น", pd.to_datetime("today"))
-    manual_clock = st.sidebar.time_input("เวลาเริ่มต้น", pd.to_datetime("08:00").time())
-    manual_start_dt = datetime.combine(manual_date, manual_clock)
 
 # ==========================================
 # โครงสร้าง Mapping ตามไฟล์จริง (20 Channels)
@@ -62,10 +70,8 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
-HEADER_OFFSET = 512
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"  # Big-Endian Signed Int16
-STRIDE = 90        # จำนวนคอลัมน์ทั้งหมดต่อ 1 เฟรมการบันทึก
 
 top_names = [ch_info[i] for i in range(1, 8)]
 bot_names = [ch_info[i] for i in range(8, 15)]
@@ -79,27 +85,43 @@ COLOR_PALETTE = [
     "#e67e22", "#1abc9c", "#3498db", "#9b59b6"
 ]
 
-# ฟังก์ชันสกัดวันและเวลาจริงจากชื่อไฟล์ .DAD
-def parse_datetime_from_filename(filename):
-    match = re.search(r'(\d{6})_(\d{6})', filename)
+def extract_datetime_from_filename(filename, default_dt):
+    match = re.search(r'(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})', filename)
     if match:
-        d_str, t_str = match.groups()
-        p1, p2, p3 = int(d_str[:2]), int(d_str[2:4]), int(d_str[4:6])
-        hh, mm, ss = int(t_str[:2]), int(t_str[2:4]), int(t_str[4:6])
-        
-        # ตรวจสอบรูปแบบ YYMMDD หรือ DDMMYY
-        if p1 in [24, 25, 26, 27]:  # YYMMDD (เช่น 260825 -> 2026-08-25)
-            year, month, day = 2000 + p1, p2, p3
-        elif p3 in [24, 25, 26, 27]: # DDMMYY (เช่น 250826 -> 25/08/2026)
-            day, month, year = p1, p2, 2000 + p3
+        p1, p2, p3, hh, min_s, ss = map(int, match.groups())
+        if p1 in [24, 25, 26]:
+            year, mm, dd = 2000 + p1, p2, p3
+        elif p3 in [24, 25, 26]:
+            dd, mm, year = p1, p2, 2000 + p3
         else:
-            year, month, day = 2000 + p1, p2, p3
-
+            year, mm, dd = 2000 + p1, p2, p3
         try:
-            return datetime(year, month, day, hh, mm, ss), True
+            return datetime(year, mm, dd, hh, min_s, ss), True
         except ValueError:
-            pass
-    return datetime.now(), False
+            return default_dt, False
+    return default_dt, False
+
+# ฟังก์ชันค้นหาระยะก้าวที่จัดคอลัมน์ได้ตรงแนวตั้งที่สุด
+def detect_best_stride(scaled_signals, target_cols, candidate_range=range(84, 95)):
+    best_stride = 88
+    min_diff_sum = float('inf')
+    
+    for s in candidate_range:
+        total_rows = len(scaled_signals) // s
+        if total_rows < 10:
+            continue
+        reshaped = scaled_signals[:total_rows * s].reshape(total_rows, s)
+        valid_cols = [c for c in target_cols if c < s]
+        if not valid_cols:
+            continue
+        
+        # คำนวณความผันผวนของค่าระหว่างบรรทัดติดกัน
+        diffs = np.mean(np.abs(np.diff(reshaped[:, valid_cols], axis=0)))
+        if diffs < min_diff_sum:
+            min_diff_sum = diffs
+            best_stride = s
+            
+    return best_stride
 
 # ==========================================
 # อัปโหลดไฟล์ .DAD
@@ -113,37 +135,44 @@ if uploaded_files:
     for file in sorted_files:
         try:
             binary_data = file.read()
-            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
+            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=int(header_offset)).astype(float)
             scaled_signals = raw_signals / SCALE_DIVIDER
 
-            total_records = len(scaled_signals) // STRIDE
-            reshaped_full = scaled_signals[:total_records * STRIDE].reshape(total_records, STRIDE)
+            target_col_indices = list(col_mapping.values())
+            
+            # คำนวณหรือกำหนด Stride
+            if use_auto_stride:
+                stride = detect_best_stride(scaled_signals, target_col_indices)
+            else:
+                stride = int(manual_stride)
+
+            total_records = len(scaled_signals) // stride
+            reshaped_full = scaled_signals[:total_records * stride].reshape(total_records, stride)
 
             data_dict = {}
             for ch_num, col_idx in col_mapping.items():
                 ch_name = ch_info[ch_num]
-                data_dict[ch_name] = reshaped_full[:, col_idx]
+                if col_idx < stride:
+                    data_dict[ch_name] = reshaped_full[:, col_idx]
+                else:
+                    data_dict[ch_name] = np.zeros(total_records)
 
-            auto_dt, has_auto_dt = parse_datetime_from_filename(file.name)
-            
-            if override_time:
-                file_start_dt = manual_start_dt
-            else:
-                file_start_dt = auto_dt
+            start_dt, has_auto_dt = extract_datetime_from_filename(file.name, fallback_start_datetime)
 
             file_info_list.append({
                 "file_name": file.name,
                 "df_data": pd.DataFrame(data_dict),
                 "total_rows": total_records,
-                "start_datetime": file_start_dt,
-                "has_auto_dt": has_auto_dt
+                "start_datetime": start_dt,
+                "has_auto_dt": has_auto_dt,
+                "stride_used": stride
             })
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์ {file.name}: {e}")
 
     if file_info_list:
         all_dfs = []
-        current_time_cursor = file_info_list[0]["start_datetime"]
+        current_time_cursor = fallback_start_datetime
 
         for i, info in enumerate(file_info_list):
             total_rows = info["total_rows"]
@@ -168,19 +197,11 @@ if uploaded_files:
         full_df = full_df.sort_values(by="Datetime").reset_index(drop=True)
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
-        # 💡 ลบ Noise Spikes ขอบซ้าย: ตัดข้อมูลส่วนหัวที่เป็นค่า 0 หรือค่าน้อยกว่าปกติช่วงเริ่มต้น
-        for col in top_names + bot_names:
-            # กรองจุดที่เป็น 0 หรือน้อยกว่า 50 °C ออกช่วงเริ่มต้นเพื่อไม่ให้เกิดเส้นสไปก์แนวตั้ง
-            mask_valid = full_df[col] > 50
-            if mask_valid.any():
-                first_valid_idx = mask_valid.idxmax()
-                full_df.loc[:first_valid_idx-1, col] = np.nan
-                full_df[col] = full_df[col].interpolate(method='linear').bfill().ffill()
-
         num_files_str = f"({len(sorted_files)} Files)"
+        stride_info_str = f" (Stride ปัจจุบัน: {file_info_list[0]['stride_used']} Columns)"
 
         # ==========================================
-        # 📥 ปุ่ม Export Excel / CSV ด้านข้าง
+        # 📥 ดาวน์โหลดข้อมูล
         # ==========================================
         st.sidebar.divider()
         st.sidebar.header("📥 ดาวน์โหลดข้อมูล (Export)")
@@ -213,7 +234,7 @@ if uploaded_files:
                 use_container_width=True
             )
 
-        with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
+        with st.expander(f"🔍 ดูตารางข้อมูลรวมทุกไฟล์ {stride_info_str}"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
