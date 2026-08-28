@@ -15,51 +15,23 @@ st.title("📊 DAD Time-Series Visualizer")
 # ==========================================
 # แถบตั้งค่าด้านข้าง (Sidebar)
 # ==========================================
-st.sidebar.header("⏰ ตั้งค่าเวลาสำรอง")
-start_date = st.sidebar.date_input("วันที่เริ่มต้น", pd.to_datetime("today"))
-start_time = st.sidebar.time_input("เวลาเริ่มต้น", pd.to_datetime("08:00").time())
-fallback_start_datetime = datetime.combine(start_date, start_time)
-
-st.sidebar.divider()
-st.sidebar.header("🔧 จูนตำแหน่งคอลัมน์ (Calibration)")
-st.sidebar.markdown("""
-*หากตารางมีค่าสลับช่อง (เลื่อนทแยงมุม) ให้ลองปรับ **ระยะก้าว (Stride)** จนกว่าค่าจะอยู่ในคอลัมน์เดิมตลอดแนวตั้ง*
-""")
-# ปกติ Yokogawa เครื่องบันทึกส่วนใหญ่มักใช้ 90, 89 หรือ 88
-manual_stride = st.sidebar.slider("ระยะก้าวแถว (Stride)", min_value=80, max_value=100, value=90, step=1)
-header_offset = st.sidebar.slider("Header Bytes (Offset)", min_value=0, max_value=1024, value=512, step=2)
-
-st.sidebar.divider()
 st.sidebar.header("⚙️ การแสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
-# ==========================================
-# โครงสร้าง Mapping ตำแหน่งช่องสัญญาณ
-# ==========================================
-col_mapping = {
-    1: 4,   # Z#1 Top
-    2: 6,   # Z#2 Top
-    3: 8,   # Z#3 Top
-    4: 10,  # Z#4 Top
-    5: 12,  # Z#5 Top
-    6: 14,  # Z#6 Top
-    7: 16,  # Z#7 Top
-    8: 18,  # Z#1 Bottom
-    9: 20,  # Z#2 Bottom
-    10: 22, # Z#3 Bottom
-    11: 24, # Z#4 Bottom
-    12: 26, # Z#5 Bottom
-    13: 28, # Z#6 Bottom
-    14: 30, # Z#7 Bottom
-    15: 32, # O2 Exit
-    16: 36, # Dryer #1
-    17: 38, # Dryer #2
-    18: 84, # N2 Flow
-    19: 88, # O2 Entrance
-    20: 86, # Dew Point
-}
+st.sidebar.divider()
+st.sidebar.header("🔧 จูนโครงสร้างไบนารี (Advanced Parsing)")
+st.sidebar.markdown("""
+*หากค่าตัวเลขยังไม่ตรง ให้ลองเลื่อน `Offset (จุดเริ่มต้น)` เพื่อขยับตัวเลขให้ตรงล็อค*
+""")
+# ให้ผู้ใช้เลื่อนหา Offset จนกว่ากราฟจะโผล่ขึ้นมาตรงตามจริง
+byte_offset = st.sidebar.slider("จุดเริ่มต้น Header (Byte Offset)", min_value=0, max_value=2048, value=512, step=2)
+stride_length = st.sidebar.slider("ความกว้างบรรทัด (Stride Length)", min_value=10, max_value=250, value=88, step=1)
 
+# ==========================================
+# โครงสร้าง Mapping สัญญาณ
+# ==========================================
+# ตั้งค่าลำดับช่องสัญญาณ 20 ช่อง ตามหน้าจอแสดงผล
 ch_info = {
     1: "Z#1 Top", 2: "Z#2 Top", 3: "Z#3 Top", 4: "Z#4 Top",
     5: "Z#5 Top", 6: "Z#6 Top", 7: "Z#7 Top",
@@ -69,58 +41,48 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
-SCALE_DIVIDER = 10.0
-DTYPE_STR = ">i2"  # Big-Endian Int16
-
 top_names = [ch_info[i] for i in range(1, 8)]
 bot_names = [ch_info[i] for i in range(8, 15)]
+all_col_names = [ch_info[i] for i in range(1, 21)]
 
 COLOR_PALETTE = [
     "#8e44ad", "#2980b9", "#27ae60", "#d35400", 
     "#f39c12", "#c0392b", "#16a085", "#8e44ad", 
     "#2980b9", "#27ae60", "#d35400", "#f39c12", 
-    "#c0392b", "#16a085", "#e74c3c", "#2ecc71"
+    "#c0392b", "#16a085", "#e74c3c", "#2ecc71", 
+    "#e67e22", "#1abc9c", "#3498db", "#9b59b6"
 ]
 
-# ฟังก์ชันอ่าน วัน-เวลา จากชื่อไฟล์
-def extract_datetime_from_filename(filename, default_dt):
-    # รองรับไฟล์ที่มีตัวเลข 6 หลัก 2 ชุด เช่น 260825_012000
+# ฟังก์ชันสกัดวันและเวลาจริงจากชื่อไฟล์ .DAD
+def parse_datetime_from_filename(filename):
     match = re.search(r'(\d{6})_(\d{6})', filename)
     if not match:
-        # ลองหาแบบ 6 หลักเดี่ยวๆ (เผื่อมีแค่วันที่หรือเวลา)
         match = re.search(r'(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})', filename)
 
-    if match and len(match.groups()) == 2:
-        d_str, t_str = match.groups()
-        p1, p2, p3 = int(d_str[:2]), int(d_str[2:4]), int(d_str[4:6])
-        hh, mm, ss = int(t_str[:2]), int(t_str[2:4]), int(t_str[4:6])
-        
-        # คาดเดา ปี 20xx
-        if 20 <= p1 <= 30:   # Format: YYMMDD
+    if match:
+        if len(match.groups()) == 2:
+            d_str, t_str = match.groups()
+            p1, p2, p3 = int(d_str[:2]), int(d_str[2:4]), int(d_str[4:6])
+            hh, mm, ss = int(t_str[:2]), int(t_str[2:4]), int(t_str[4:6])
+        else:
+            p1, p2, p3, hh, mm, ss = map(int, match.groups())
+            
+        # ตรวจสอบรูปแบบ YYMMDD หรือ DDMMYY
+        if 20 <= p1 <= 30:  # YYMMDD (เช่น 260825 -> 2026-08-25)
             year, month, day = 2000 + p1, p2, p3
-        elif 20 <= p3 <= 30: # Format: DDMMYY
+        elif 20 <= p3 <= 30: # DDMMYY (เช่น 250826 -> 25/08/2026)
             day, month, year = p1, p2, 2000 + p3
         else:
             year, month, day = 2000 + p1, p2, p3
-            
+
         try:
             return datetime(year, month, day, hh, mm, ss), True
         except ValueError:
             pass
-            
-    elif match and len(match.groups()) == 6:
-        p1, p2, p3, hh, mm, ss = map(int, match.groups())
-        if 20 <= p1 <= 30:
-            year, month, day = 2000 + p1, p2, p3
-        else:
-            day, month, year = p1, p2, 2000 + p3
-        try:
-            return datetime(year, month, day, hh, mm, ss), True
-        except ValueError:
-            pass
-
-    return default_dt, False
-
+    
+    # กรณีไม่พบเวลาในชื่อไฟล์ ให้ใช้วันนี้ 08:00
+    fallback_dt = pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
+    return fallback_dt, False
 
 # ==========================================
 # อัปโหลดไฟล์ .DAD
@@ -134,33 +96,38 @@ if uploaded_files:
     for file in sorted_files:
         try:
             binary_data = file.read()
-            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=int(header_offset)).astype(float)
-            scaled_signals = raw_signals / SCALE_DIVIDER
+            
+            # แปลงไฟล์เป็น Int16
+            raw_signals = np.frombuffer(binary_data, dtype=">i2", offset=int(byte_offset)).astype(float)
+            scaled_signals = raw_signals / 10.0
 
-            stride = int(manual_stride)
-            total_records = len(scaled_signals) // stride
+            total_records = len(scaled_signals) // int(stride_length)
             
             if total_records == 0:
-                st.warning(f"ไฟล์ {file.name} เล็กเกินไป หรือ Offset ไม่ถูกต้อง")
+                st.warning(f"ไฟล์ {file.name} ข้อมูลสั้นเกินไป หรือตั้งค่า Offset เกินขนาดไฟล์")
                 continue
 
-            reshaped_full = scaled_signals[:total_records * stride].reshape(total_records, stride)
+            # สร้างตารางข้อมูลขนาด (N x Stride)
+            reshaped_full = scaled_signals[:total_records * int(stride_length)].reshape(total_records, int(stride_length))
 
+            # สร้าง DataFrame ชั่วคราว 20 คอลัมน์แรกเพื่อนำมาสแกนค่า
+            # (ขยับช่วงคอลัมน์ให้อ่าน 20 ช่องสัญญาณ เริ่มจาก Col 0 เป็นต้นไป)
+            usable_cols = min(20, int(stride_length))
             data_dict = {}
-            for ch_num, col_idx in col_mapping.items():
-                ch_name = ch_info[ch_num]
-                if col_idx < stride:
-                    data_dict[ch_name] = reshaped_full[:, col_idx]
-                else:
-                    data_dict[ch_name] = np.zeros(total_records)
+            for i in range(usable_cols):
+                data_dict[all_col_names[i]] = reshaped_full[:, i]
+            
+            # เติม 0 ให้ครบ 20 ช่องหาก Stride ต่ำกว่า 20
+            for i in range(usable_cols, 20):
+                data_dict[all_col_names[i]] = np.zeros(total_records)
 
-            start_dt, has_auto_dt = extract_datetime_from_filename(file.name, fallback_start_datetime)
+            auto_dt, has_auto_dt = parse_datetime_from_filename(file.name)
 
             file_info_list.append({
                 "file_name": file.name,
                 "df_data": pd.DataFrame(data_dict),
                 "total_rows": total_records,
-                "start_datetime": start_dt,
+                "start_datetime": auto_dt,
                 "has_auto_dt": has_auto_dt
             })
         except Exception as e:
@@ -168,12 +135,12 @@ if uploaded_files:
 
     if file_info_list:
         all_dfs = []
-        current_time_cursor = fallback_start_datetime
-
+        
+        # จัดการร้อยเรียงเวลาของทุกไฟล์เข้าด้วยกัน (คำนวณวินาทีอัตโนมัติ)
+        current_time_cursor = file_info_list[0]["start_datetime"]
         for i, info in enumerate(file_info_list):
             total_rows = info["total_rows"]
             
-            # คำนวณช่วงห่างเวลาของจุดข้อมูล (วินาทีต่อจุด) อัตโนมัติ
             if i < len(file_info_list) - 1 and info["has_auto_dt"] and file_info_list[i+1]["has_auto_dt"]:
                 delta_sec = (file_info_list[i+1]["start_datetime"] - info["start_datetime"]).total_seconds()
                 auto_sample_rate = delta_sec / total_rows if total_rows > 0 else 1.0
@@ -197,7 +164,7 @@ if uploaded_files:
         num_files_str = f"({len(sorted_files)} Files)"
 
         # ==========================================
-        # 📥 ดาวน์โหลดข้อมูล
+        # 📥 ปุ่ม Export Excel / CSV ด้านข้าง
         # ==========================================
         st.sidebar.divider()
         st.sidebar.header("📥 ดาวน์โหลดข้อมูล (Export)")
@@ -207,25 +174,30 @@ if uploaded_files:
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                 full_df.to_excel(writer, sheet_name='All Data', index=False)
-            
+                full_df[['Datetime'] + top_names].to_excel(writer, sheet_name='Top Zones', index=False)
+                full_df[['Datetime'] + bot_names].to_excel(writer, sheet_name='Bottom Zones', index=False)
+                full_df[['Datetime', 'Dryer #1', 'Dryer #2']].to_excel(writer, sheet_name='Dryer', index=False)
+                full_df[['Datetime', 'O2 Exit', 'O2 Entrance', 'N2 Flow']].to_excel(writer, sheet_name='O2 & N2 Flow', index=False)
+                full_df[['Datetime', 'Dew Point']].to_excel(writer, sheet_name='Dew Point', index=False)
+
             st.sidebar.download_button(
                 label="📥 ดาวน์โหลดไฟล์ Excel (.xlsx)",
                 data=excel_buffer.getvalue(),
-                file_name=f"DAD_Export_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-        except ImportError:
+        except Exception:
             csv_data = full_df.to_csv(index=False).encode('utf-8-sig')
             st.sidebar.download_button(
                 label="📥 ดาวน์โหลดข้อมูล (.csv)",
                 data=csv_data,
-                file_name=f"DAD_Export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
 
-        with st.expander(f"🔍 ดูตารางข้อมูลดิบ (ตรวจเช็คค่าเฉียงทแยงมุมที่นี่) - Stride: {manual_stride}"):
+        with st.expander("🔍 ดูตารางข้อมูล (ปรับ Slider ด้านซ้ายเพื่อเลื่อนตัวเลขเข้าช่องที่ถูกต้อง)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         # ----------------------------------------
@@ -241,7 +213,7 @@ if uploaded_files:
             )
             fig.update_xaxes(
                 title_text="Date & Time",
-                tickformat="%d/%m\n%H:%M:%S",  # แสดงวันที่/เดือน และ วินาที
+                tickformat="%d/%m\n%H:%M:%S",
                 showgrid=True, gridcolor="#E5E5E5"
             )
             fig.update_yaxes(
@@ -272,7 +244,7 @@ if uploaded_files:
                         showlegend=False, hoverinfo="skip"
                     ), secondary_y=is_sec)
 
-        # 1. Top Zones
+        # 1. Top Zones (Auto-range เผื่อค่าอุณหภูมิสวิง)
         st.subheader(f"📐 Top Zones Timeline {num_files_str}")
         fig_top = make_subplots(specs=[[{"secondary_y": False}]])
         for idx, col in enumerate(top_names):
@@ -282,7 +254,7 @@ if uploaded_files:
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
         add_max_min_markers(fig_top, full_df, top_names)
-        apply_white_theme_style(fig_top, "Temperature [°C]", y_range=[400, 650])
+        apply_white_theme_style(fig_top, "Temperature [°C]", y_range=None)
         st.plotly_chart(fig_top, use_container_width=True)
 
         # 2. Bottom Zones
@@ -295,7 +267,7 @@ if uploaded_files:
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
         add_max_min_markers(fig_bot, full_df, bot_names)
-        apply_white_theme_style(fig_bot, "Temperature [°C]", y_range=[400, 650])
+        apply_white_theme_style(fig_bot, "Temperature [°C]", y_range=None)
         st.plotly_chart(fig_bot, use_container_width=True)
 
         # 3. Dryer Temperatures
@@ -308,7 +280,7 @@ if uploaded_files:
             x=full_df["Datetime"], y=full_df["Dryer #2"], name="Dryer #2", line=dict(color="#e67e22", width=2.0)
         ))
         add_max_min_markers(fig_dryer, full_df, ["Dryer #1", "Dryer #2"])
-        apply_white_theme_style(fig_dryer, "Temperature [°C]", y_range=[0, 400])
+        apply_white_theme_style(fig_dryer, "Temperature [°C]", y_range=None)
         st.plotly_chart(fig_dryer, use_container_width=True)
 
         # 4. Oxygen & N2
@@ -324,7 +296,7 @@ if uploaded_files:
             x=full_df["Datetime"], y=full_df["N2 Flow"], name="N2 Flow", line=dict(color="#2ecc71", width=1.5, dash="dash")
         ), secondary_y=True)
         add_max_min_markers(fig_o2_n2, full_df, ["O2 Exit", "O2 Entrance", "N2 Flow"], secondary_y_cols=["N2 Flow"])
-        apply_white_theme_style(fig_o2_n2, "O2 Level [ppm]", y_range=[0, 200])
+        apply_white_theme_style(fig_o2_n2, "O2 Level [ppm]", y_range=None)
         fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True, showgrid=False)
         st.plotly_chart(fig_o2_n2, use_container_width=True)
 
@@ -335,5 +307,5 @@ if uploaded_files:
             x=full_df["Datetime"], y=full_df["Dew Point"], name="Dew Point", line=dict(color="#9b59b6", width=2.0)
         ))
         add_max_min_markers(fig_dew, full_df, ["Dew Point"])
-        apply_white_theme_style(fig_dew, "Dew Point [°Cdp]", y_range=[-100, 10])
+        apply_white_theme_style(fig_dew, "Dew Point [°Cdp]", y_range=None)
         st.plotly_chart(fig_dew, use_container_width=True)
