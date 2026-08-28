@@ -21,6 +21,12 @@ start_time = st.sidebar.time_input("เวลาเริ่มต้น", pd.to
 fallback_start_datetime = datetime.combine(start_date, start_time)
 
 st.sidebar.divider()
+st.sidebar.header("🔧 การจัดตำแหน่งข้อมูล (Binary Alignment)")
+auto_stride = st.sidebar.checkbox("⚡ ตรวจจับระยะก้าวอัตโนมัติ (Auto-Align Stride)", value=True)
+manual_stride = st.sidebar.number_input("ระยะก้าวคอลัมน์ดิบ (Manual Stride)", min_value=10, max_value=200, value=89, step=1)
+header_offset = st.sidebar.number_input("Header Offset (Bytes)", min_value=0, max_value=2048, value=512, step=64)
+
+st.sidebar.divider()
 st.sidebar.header("⚙️ การแสดงผล (Display Options)")
 show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Show Max)", value=False)
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
@@ -60,10 +66,8 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
-HEADER_OFFSET = 512
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"  # Big-Endian Signed Int16
-STRIDE = 90        # จำนวนคอลัมน์ทั้งหมดต่อ 1 เฟรมการบันทึก
 
 top_names = [ch_info[i] for i in range(1, 8)]
 bot_names = [ch_info[i] for i in range(8, 15)]
@@ -93,6 +97,28 @@ def extract_datetime_from_filename(filename, default_dt):
             return default_dt, False
     return default_dt, False
 
+# ฟังก์ชันคำนวณหาค่า Stride ที่ขจัดอาการเลื่อนเฉียงอัตโนมัติ
+def find_optimal_stride(scaled_signals, col_indices, min_s=20, max_s=150):
+    best_s = 90
+    min_jitter = float('inf')
+    max_len = len(scaled_signals)
+    
+    for s in range(min_s, min(max_s, max_len // 10)):
+        rows = max_len // s
+        if rows < 5:
+            continue
+        reshaped = scaled_signals[:rows * s].reshape(rows, s)
+        valid_cols = [c for c in col_indices if c < s]
+        if len(valid_cols) < 3:
+            continue
+        # คำนวณความผันผวนระหว่างบรรทัดติดกัน (หาก Stride ถูกต้อง ความผันผวนจะต่ำที่สุด)
+        jitter = np.mean(np.abs(np.diff(reshaped[:, valid_cols], axis=0)))
+        if jitter < min_jitter:
+            min_jitter = jitter
+            best_s = s
+            
+    return best_s
+
 # ==========================================
 # อัปโหลดไฟล์ .DAD
 # ==========================================
@@ -105,16 +131,27 @@ if uploaded_files:
     for file in sorted_files:
         try:
             binary_data = file.read()
-            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
+            raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=int(header_offset)).astype(float)
             scaled_signals = raw_signals / SCALE_DIVIDER
 
-            total_records = len(scaled_signals) // STRIDE
-            reshaped_full = scaled_signals[:total_records * STRIDE].reshape(total_records, STRIDE)
+            target_cols = list(col_mapping.values())
+            
+            # เลือกระยะก้าว Stride
+            if auto_stride:
+                stride = find_optimal_stride(scaled_signals, target_cols)
+            else:
+                stride = int(manual_stride)
+
+            total_records = len(scaled_signals) // stride
+            reshaped_full = scaled_signals[:total_records * stride].reshape(total_records, stride)
 
             data_dict = {}
             for ch_num, col_idx in col_mapping.items():
                 ch_name = ch_info[ch_num]
-                data_dict[ch_name] = reshaped_full[:, col_idx]
+                if col_idx < stride:
+                    data_dict[ch_name] = reshaped_full[:, col_idx]
+                else:
+                    data_dict[ch_name] = np.zeros(total_records)
 
             start_dt, has_auto_dt = extract_datetime_from_filename(file.name, fallback_start_datetime)
 
@@ -123,7 +160,8 @@ if uploaded_files:
                 "df_data": pd.DataFrame(data_dict),
                 "total_rows": total_records,
                 "start_datetime": start_dt,
-                "has_auto_dt": has_auto_dt
+                "has_auto_dt": has_auto_dt,
+                "detected_stride": stride
             })
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์ {file.name}: {e}")
@@ -156,14 +194,16 @@ if uploaded_files:
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
         num_files_str = f"({len(sorted_files)} Files)"
+        detected_str = f" (Stride ที่ใช้อยู่: {file_info_list[0]['detected_stride']} Columns)"
 
         # ==========================================
-        # 📥 ย้ายปุ่ม / แจ้งเตือน Excel ไปไว้ใน Sidebar ด้านซ้าย
+        # 📥 ดาวน์โหลดข้อมูล
         # ==========================================
         st.sidebar.divider()
         st.sidebar.header("📥 ดาวน์โหลดข้อมูล (Export)")
 
         try:
+            import openpyxl
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                 full_df.to_excel(writer, sheet_name='All Data', index=False)
@@ -173,19 +213,24 @@ if uploaded_files:
                 full_df[['Datetime', 'O2 Exit', 'O2 Entrance', 'N2 Flow']].to_excel(writer, sheet_name='O2 & N2 Flow', index=False)
                 full_df[['Datetime', 'Dew Point']].to_excel(writer, sheet_name='Dew Point', index=False)
 
-            excel_data = excel_buffer.getvalue()
-
             st.sidebar.download_button(
                 label="📥 ดาวน์โหลดไฟล์ Excel (.xlsx)",
-                data=excel_data,
+                data=excel_buffer.getvalue(),
                 file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-        except ModuleNotFoundError:
-            st.sidebar.warning("⚠️ กรุณาเพิ่ม openpyxl ลงในไฟล์ requirements.txt บน GitHub เพื่อเปิดใช้งานปุ่มดาวน์โหลดไฟล์ Excel")
+        except Exception:
+            csv_data = full_df.to_csv(index=False).encode('utf-8-sig')
+            st.sidebar.download_button(
+                label="📥 ดาวน์โหลดข้อมูล (.csv)",
+                data=csv_data,
+                file_name=f"DAD_Export_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
 
-        with st.expander("🔍 ดูตารางข้อมูลรวมทุกไฟล์ (Combined Dataset)"):
+        with st.expander(f"🔍 ดูตารางข้อมูลรวมทุกไฟล์ {detected_str}"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
