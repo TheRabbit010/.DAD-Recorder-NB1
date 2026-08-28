@@ -20,29 +20,35 @@ show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Sh
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 # ==========================================
-# โครงสร้าง Mapping สัญญาณ (Yokogawa DX/MV 180-Byte Record)
+# โครงสร้างไบนารีของเครื่อง Yokogawa (176 Bytes / 88 Words)
 # ==========================================
+HEADER_OFFSET = 512
+STRIDE_WORDS = 88    # 88 คำ = 176 ไบต์ ต่อ 1 บรรทัดเวลา
+SCALE_DIVIDER = 10.0
+DTYPE_STR = ">i2"
+
+# ดัชนีคอลัมน์ (นับเป็นหน่วย Word) ของแต่ละแชนเนล
 col_mapping = {
-    1: 4,   # CH01 -> Z#1 Top
-    2: 6,   # CH02 -> Z#2 Top
-    3: 8,   # CH03 -> Z#3 Top
-    4: 10,  # CH04 -> Z#4 Top
-    5: 12,  # CH05 -> Z#5 Top
-    6: 14,  # CH06 -> Z#6 Top
-    7: 16,  # CH07 -> Z#7 Top
-    8: 18,  # CH08 -> Z#1 Bottom
-    9: 20,  # CH09 -> Z#2 Bottom
-    10: 22, # CH10 -> Z#3 Bottom
-    11: 24, # CH11 -> Z#4 Bottom
-    12: 26, # CH12 -> Z#5 Bottom
-    13: 28, # CH13 -> Z#6 Bottom
-    14: 30, # CH14 -> Z#7 Bottom
-    15: 32, # CH15 -> O2 Exit
-    16: 36, # CH16 -> Dryer #1
-    17: 38, # CH17 -> Dryer #2
-    18: 84, # CH18 -> N2 Flow
-    19: 88, # CH19 -> O2 Entrance
-    20: 86, # CH20 -> Dew Point
+    1: 4,   # Z#1 Top
+    2: 6,   # Z#2 Top
+    3: 8,   # Z#3 Top
+    4: 10,  # Z#4 Top
+    5: 12,  # Z#5 Top
+    6: 14,  # Z#6 Top
+    7: 16,  # Z#7 Top
+    8: 18,  # Z#1 Bottom
+    9: 20,  # Z#2 Bottom
+    10: 22, # Z#3 Bottom
+    11: 24, # Z#4 Bottom
+    12: 26, # Z#5 Bottom
+    13: 28, # Z#6 Bottom
+    14: 30, # Z#7 Bottom
+    15: 32, # O2 Exit
+    16: 36, # Dryer #1
+    17: 38, # Dryer #2
+    18: 84, # N2 Flow
+    19: 88, # O2 Entrance
+    20: 86, # Dew Point
 }
 
 ch_info = {
@@ -54,11 +60,6 @@ ch_info = {
     19: "O2 Entrance", 20: "Dew Point"
 }
 
-POSSIBLE_HEADER_OFFSETS = [512, 1024, 256, 0]
-# จัดลำดับ 180 ไบต์ (90 คำ) เป็นตัวเลือกหลักอันดับ 1
-POSSIBLE_RECORD_SIZES = [180, 178, 182, 176, 184, 192, 90, 88]
-SCALE_DIVIDER = 10.0
-
 top_names = [ch_info[i] for i in range(1, 8)]
 bot_names = [ch_info[i] for i in range(8, 15)]
 
@@ -69,6 +70,7 @@ COLOR_PALETTE = [
     "#c0392b", "#16a085", "#e74c3c", "#2ecc71"
 ]
 
+# ถอดรหัสเวลา BCD Timestamp (6 ไบต์แรกของแต่ละบรรทัด)
 def decode_bcd_timestamp(byte_arr):
     try:
         y = ((byte_arr[0] >> 4) * 10) + (byte_arr[0] & 0x0F)
@@ -78,6 +80,7 @@ def decode_bcd_timestamp(byte_arr):
         mm = ((byte_arr[4] >> 4) * 10) + (byte_arr[4] & 0x0F)
         ss = ((byte_arr[5] >> 4) * 10) + (byte_arr[5] & 0x0F)
         
+        # ตรวจสอบความถูกต้องของปฏิทิน
         if 20 <= y <= 35 and 1 <= m <= 12 and 1 <= d <= 31 and 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59:
             return datetime(2000 + y, m, d, hh, mm, ss)
     except Exception:
@@ -107,99 +110,6 @@ def extract_start_time_from_filename(filename):
             
     return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0)
 
-# ฟังก์ชันคำนวณและตรวจสอบความสม่ำเสมอของลำดับเวลา (Stability Scanner)
-def parse_dad_binary_file(file_bytes, filename):
-    best_offset = 512
-    best_rsize = 180
-    max_consecutive_steps = -1
-    detected_step_sec = 1.0
-
-    # 1. สแกนหา Offset และ Record Size ที่ถูกต้องที่สุดด้วยความสม่ำเสมอของช่วงเวลา
-    for offset in POSSIBLE_HEADER_OFFSETS:
-        buf = file_bytes[offset:]
-        if len(buf) < 360:
-            continue
-        for rsize in POSSIBLE_RECORD_SIZES:
-            total_recs = len(buf) // rsize
-            if total_recs < 3:
-                continue
-
-            consecutive_valid = 0
-            prev_dt = None
-            step_sec = None
-
-            for r in range(min(total_recs, 50)):
-                rec_bytes = buf[r*rsize : r*rsize + 6]
-                curr_dt = decode_bcd_timestamp(rec_bytes)
-
-                if curr_dt is not None:
-                    if prev_dt is not None:
-                        diff = (curr_dt - prev_dt).total_seconds()
-                        if step_sec is None and 0 < diff <= 3600:
-                            step_sec = diff
-                            consecutive_valid += 1
-                        elif step_sec is not None and diff == step_sec:
-                            consecutive_valid += 1
-                        else:
-                            break
-                    else:
-                        consecutive_valid += 1
-                    prev_dt = curr_dt
-                else:
-                    break
-
-            if consecutive_valid > max_consecutive_steps:
-                max_consecutive_steps = consecutive_valid
-                best_offset = offset
-                best_rsize = rsize
-                if step_sec:
-                    detected_step_sec = step_sec
-
-    # 2. ถอดรหัสไฟล์ตามโครงสร้าง Record จริง
-    buf = file_bytes[best_offset:]
-    total_records = len(buf) // best_rsize
-
-    timestamps = []
-    data_dict = {ch_info[ch]: np.zeros(total_records) for ch in range(1, 21)}
-    fallback_dt = extract_start_time_from_filename(filename)
-    last_valid_ts = fallback_dt
-
-    for r in range(total_records):
-        rec_raw = buf[r*best_rsize : (r+1)*best_rsize]
-
-        ts = decode_bcd_timestamp(rec_raw[:6])
-        if ts is not None:
-            timestamps.append(ts)
-            last_valid_ts = ts
-        else:
-            if len(timestamps) > 0:
-                last_valid_ts = last_valid_ts + timedelta(seconds=detected_step_sec)
-                timestamps.append(last_valid_ts)
-            else:
-                timestamps.append(fallback_dt)
-
-        words_in_rec = best_rsize // 2
-        rec_words = np.frombuffer(rec_raw[:words_in_rec*2], dtype='>i2').astype(float) / SCALE_DIVIDER
-
-        for ch_num, col_idx in col_mapping.items():
-            ch_name = ch_info[ch_num]
-            if col_idx < len(rec_words):
-                val = rec_words[col_idx]
-                if val < -500.0 or val > 3500.0:
-                    data_dict[ch_name][r] = np.nan
-                else:
-                    data_dict[ch_name][r] = val
-            else:
-                data_dict[ch_name][r] = np.nan
-
-    df = pd.DataFrame(data_dict)
-
-    for col in df.columns:
-        df[col] = df[col].interpolate(method='linear').ffill().bfill()
-
-    df.insert(0, "Datetime", timestamps)
-    return df
-
 # ==========================================
 # อัปโหลดไฟล์ .DAD
 # ==========================================
@@ -212,9 +122,60 @@ if uploaded_files:
     for file in sorted_files:
         try:
             binary_data = file.read()
-            df_parsed = parse_dad_binary_file(binary_data, file.name)
-            if df_parsed is not None and not df_parsed.empty:
-                all_dfs.append(df_parsed)
+            buf = binary_data[HEADER_OFFSET:]
+            record_size_bytes = STRIDE_WORDS * 2
+            total_records = len(buf) // record_size_bytes
+            
+            if total_records == 0:
+                st.warning(f"ไฟล์ {file.name} มีขนาดเล็กเกินไป")
+                continue
+
+            timestamps = []
+            data_dict = {ch_info[ch]: np.zeros(total_records) for ch in range(1, 21)}
+            
+            fallback_dt = extract_start_time_from_filename(file.name)
+            last_valid_ts = fallback_dt
+
+            for r in range(total_records):
+                rec_raw = buf[r*record_size_bytes : (r+1)*record_size_bytes]
+                
+                # 1. ถอดรหัสเวลาจริงประจำบรรทัด (Real hardware timestamp)
+                ts = decode_bcd_timestamp(rec_raw[:6])
+                if ts is not None:
+                    timestamps.append(ts)
+                    last_valid_ts = ts
+                else:
+                    # ถ้าเกิด error ควรอิงตามวินาทีถัดไป
+                    if len(timestamps) > 0:
+                        last_valid_ts = last_valid_ts + timedelta(seconds=1)
+                        timestamps.append(last_valid_ts)
+                    else:
+                        timestamps.append(fallback_dt)
+
+                # 2. ถอดรหัสข้อมูลช่องสัญญาณ
+                rec_words = np.frombuffer(rec_raw, dtype='>i2').astype(float) / SCALE_DIVIDER
+                
+                for ch_num, col_idx in col_mapping.items():
+                    ch_name = ch_info[ch_num]
+                    if col_idx < len(rec_words):
+                        val = rec_words[col_idx]
+                        # กรองค่าขยะหรือ Error Code เครื่องบันทึก
+                        if val < -500.0 or val > 3500.0:
+                            data_dict[ch_name][r] = np.nan
+                        else:
+                            data_dict[ch_name][r] = val
+                    else:
+                        data_dict[ch_name][r] = np.nan
+
+            df_single = pd.DataFrame(data_dict)
+            df_single.insert(0, "Datetime", timestamps)
+            
+            # เชื่อมจุดข้อมูลที่หายไป (Interpolate) เพื่อให้กราฟสมูท
+            for col in df_single.columns[1:]:
+                df_single[col] = df_single[col].interpolate(method='linear').ffill().bfill()
+                
+            all_dfs.append(df_single)
+            
         except Exception as e:
             st.error(f"เกิดข้อผิดพลาดในการอ่านไฟล์ {file.name}: {e}")
 
@@ -226,7 +187,7 @@ if uploaded_files:
         num_files_str = f"({len(sorted_files)} Files)"
 
         # ==========================================
-        # 📥 ปุ่ม Export Excel / CSV
+        # 📥 ปุ่ม Export Excel / CSV ด้านข้าง
         # ==========================================
         st.sidebar.divider()
         st.sidebar.header("📥 ดาวน์โหลดข้อมูล (Export)")
@@ -259,9 +220,12 @@ if uploaded_files:
                 use_container_width=True
             )
 
-        with st.expander("🔍 ดูตารางข้อมูลดิบ (ตรวจเช็คความถูกต้องของตัวเลขและเวลา)"):
+        with st.expander("🔍 ดูตารางข้อมูลดิบ (ค่าตัวเลขและเวลาควรตรง 100% แล้ว)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
+        # ----------------------------------------
+        # ฟังก์ชันวาดกราฟ
+        # ----------------------------------------
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
             fig.update_layout(
                 height=380,
