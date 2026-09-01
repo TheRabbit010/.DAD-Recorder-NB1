@@ -8,20 +8,30 @@ from datetime import datetime
 # 1. ตั้งค่าหน้าจอ
 # ==========================================
 st.set_page_config(layout="wide", page_title="DAD Full Raw Data Extractor")
-st.title("📄 DAD Raw Data to CSV (with MIN/MAX)")
-st.markdown("ดึงข้อมูลดิบทั้งหมดแบบจับคู่ MIN/MAX (รวม 45 Channels x 2 = 90 คอลัมน์) โดยไม่มีการฟิลเตอร์ตัดทิ้ง")
+st.title("📄 DAD Raw Data to CSV (พร้อมระบุชื่อ)")
+st.markdown("ดึงข้อมูลดิบทั้งหมด 45 Channels (MIN/MAX) พร้อมแนบชื่อจุดวัด (Tag Name) ในหัวคอลัมน์")
 
 def clear_data_state():
     if "converted_df" in st.session_state:
         del st.session_state["converted_df"]
 
 # ==========================================
-# 2. โครงสร้างไฟล์ .DAD
+# 2. โครงสร้างไฟล์ .DAD และ Mapping ชื่อ
 # ==========================================
 HEADER_OFFSET = 512
-TOTAL_CHANNELS = 90  # จำนวนช่องข้อมูลดิบต่อบรรทัด
+TOTAL_CHANNELS = 90  # 90 Raw channels = 45 Logical channels (MIN/MAX)
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"
+
+# 💡 กำหนดชื่อให้กับช่องสัญญาณ (อ้างอิงจากลำดับ Index หาร 2)
+# เช่น Z#1 Top เดิมอยู่ Index 4,5 -> นำมาหาร 2 จะตรงกับ Channel ที่ 3
+logical_ch_names = {
+    3: "Z#1 Top", 4: "Z#2 Top", 5: "Z#3 Top", 6: "Z#4 Top", 7: "Z#5 Top", 8: "Z#6 Top", 9: "Z#7 Top",
+    10: "Z#1 Bottom", 11: "Z#2 Bottom", 12: "Z#3 Bottom", 13: "Z#4 Bottom", 14: "Z#5 Bottom", 15: "Z#6 Bottom", 16: "Z#7 Bottom",
+    17: "O2 Exit", 
+    19: "Dryer #1", 20: "Dryer #2",
+    43: "N2 Flow", 44: "Dew Point", 45: "O2 Entrance"
+}
 
 def extract_start_time_from_filename(filename):
     matches = re.findall(r'\d{6}', filename)
@@ -44,7 +54,7 @@ uploaded_files = st.file_uploader("อัปโหลดไฟล์ .DAD ที
 if uploaded_files and "converted_df" not in st.session_state:
     all_dfs = []
     
-    with st.spinner("กำลังสกัดข้อมูลและจับคู่ MIN / MAX..."):
+    with st.spinner("กำลังสกัดข้อมูลและระบุชื่อคอลัมน์..."):
         for file in uploaded_files:
             try:
                 start_dt = extract_start_time_from_filename(file.name)
@@ -61,17 +71,26 @@ if uploaded_files and "converted_df" not in st.session_state:
                 reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='C')
                 reshaped_data = reshaped_data / SCALE_DIVIDER
 
-                # 💡 ตั้งชื่อคอลัมน์แบบจับคู่ MIN / MAX
+                # ตั้งชื่อคอลัมน์แบบจับคู่ MIN / MAX และแนบชื่อเข้าไป
                 data_dict = {}
-                num_logical_channels = TOTAL_CHANNELS // 2  # 90 / 2 = 45 ช่องสัญญาณ
+                num_logical_channels = TOTAL_CHANNELS // 2  # 45 ช่องสัญญาณหลัก
                 
                 for i in range(num_logical_channels):
-                    ch_num = str(i + 1).zfill(3) # รูปแบบ CH001, CH002...
-                    min_idx = i * 2              # Index เลขคู่เป็น MIN
-                    max_idx = i * 2 + 1          # Index เลขคี่เป็น MAX
+                    ch_num = i + 1
+                    ch_str = str(ch_num).zfill(3)
                     
-                    data_dict[f"CH{ch_num}_MIN"] = reshaped_data[:, min_idx]
-                    data_dict[f"CH{ch_num}_MAX"] = reshaped_data[:, max_idx]
+                    # ตรวจสอบว่าช่องนี้มีชื่อที่เราตั้งไว้หรือไม่
+                    if ch_num in logical_ch_names:
+                        tag_name = logical_ch_names[ch_num]
+                        base_col_name = f"CH{ch_str} [{tag_name}]"
+                    else:
+                        base_col_name = f"CH{ch_str}"
+                    
+                    min_idx = i * 2      # Index เลขคู่ (MIN)
+                    max_idx = i * 2 + 1  # Index เลขคี่ (MAX)
+                    
+                    data_dict[f"{base_col_name}_MIN"] = reshaped_data[:, min_idx]
+                    data_dict[f"{base_col_name}_MAX"] = reshaped_data[:, max_idx]
 
                 df_single = pd.DataFrame(data_dict)
                 
@@ -95,18 +114,18 @@ if uploaded_files and "converted_df" not in st.session_state:
 if "converted_df" in st.session_state:
     df_ready = st.session_state["converted_df"]
     
-    st.success("✅ โหลดข้อมูลครบทั้งหมด (45 Channels แบ่งเป็น MIN/MAX) สำเร็จ!")
+    st.success("✅ โหลดข้อมูลและแนบชื่อ (Tag Name) เสร็จสมบูรณ์!")
     
     st.divider()
-    st.subheader("📊 พรีวิวตารางข้อมูลดิบ (MIN / MAX)")
+    st.subheader("📊 พรีวิวตารางข้อมูลดิบ (ระบุชื่อคอลัมน์แล้ว)")
     st.dataframe(df_ready.head(100), use_container_width=True)
 
     csv_data = df_ready.to_csv(index=False).encode('utf-8-sig')
     
     st.download_button(
-        label="📥 ดาวน์โหลดไฟล์ CSV (ตาราง MIN / MAX)",
+        label="📥 ดาวน์โหลดไฟล์ CSV",
         data=csv_data,
-        file_name=f"DAD_MINMAX_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        file_name=f"DAD_Named_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         type="primary",
         use_container_width=True
