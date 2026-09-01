@@ -26,7 +26,7 @@ show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Sh
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 st.sidebar.divider()
-st.sidebar.success("⏱️ **ระบบเวลา:**\n- ดึงเวลาเริ่มต้นจากชื่อไฟล์\n- ความถี่ 10 วินาที\n- กรองค่า Error (>850°C และ 0°C) ออกอัตโนมัติ")
+st.sidebar.success("⏱️ **ระบบเวลา:**\n- เวลาเริ่มต้นตามชื่อไฟล์\n- ความถี่ 10 วินาที\n- เว้นช่องว่างตามจริงเมื่อขาดสัญญาณ")
 
 st.sidebar.divider()
 if st.sidebar.button("🗑️ ล้างข้อมูลทั้งหมด (Clear Data)", use_container_width=True, type="secondary"):
@@ -34,10 +34,10 @@ if st.sidebar.button("🗑️ ล้างข้อมูลทั้งหม�
     st.rerun()
 
 # ==========================================
-# 3. โครงสร้าง Mapping สัญญาณ
+# 3. โครงสร้าง Mapping สัญญาณ (ดึงค่า MAX)
 # ==========================================
 col_mapping = {
-    1: 5,   2: 7,   3: 9,   4: 11,  5: 13,  6: 15,  7: 17,  # Top Zones (ค่า MAX)
+    1: 5,   2: 7,   3: 9,   4: 11,  5: 13,  6: 15,  7: 17,  # Top Zones (ดึงค่า MAX)
     8: 19,  9: 21,  10: 23, 11: 25, 12: 27, 13: 29, 14: 31, # Bottom Zones
     15: 33, # O2 Exit
     16: 37, 17: 39, # Dryers
@@ -114,10 +114,9 @@ if uploaded_files:
                     ch_name = ch_info[ch_num]
                     val_array = reshaped_data[:, col_idx]
                     
-                    # 💡 หัวใจสำคัญ: จำกัดช่วงอุณหภูมิให้อยู่ที่ 10°C ถึง 850°C
-                    # ตัดค่า 0.0 และค่าโดดพุ่งสูง (>850°C) ออกเป็น NaN ทั้งหมด
+                    # 💡 กรองช่วงอุณหภูมิใช้งานจริง (100°C - 750°C) ตัด Noise 827°C และ 0°C ทิ้ง
                     if "Top" in ch_name or "Bottom" in ch_name or "Dryer" in ch_name:
-                        val_array = np.where((val_array < 10.0) | (val_array > 850.0), np.nan, val_array)
+                        val_array = np.where((val_array < 100.0) | (val_array > 750.0), np.nan, val_array)
                     else:
                         val_array = np.where((val_array < -100.0) | (val_array > 3500.0), np.nan, val_array)
                         
@@ -127,9 +126,9 @@ if uploaded_files:
             time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq="10s")
             df_single.insert(0, "Datetime", time_axis)
             
-            # เชื่อมจุด NaN ด้วยเส้นตรงอย่างราบรื่น
+            # 💡 จำกัดการลากเส้นเชื่อมไม่เกิน 3 จุด (30 วินาที) เพื่อไม่ให้เกิดเส้นเฉียงข้ามช่วงที่หยุดบันทึก
             for col in df_single.columns[1:]:
-                df_single[col] = df_single[col].interpolate(method='linear', limit_direction='both')
+                df_single[col] = df_single[col].interpolate(method='linear', limit=3)
                 
             all_dfs.append(df_single)
             
@@ -156,8 +155,8 @@ if uploaded_files:
             use_container_width=True
         )
 
-        with st.expander("🔍 ดูตารางข้อมูลดิบ (กรองค่า Error เรียบร้อย)"):
-            st.dataframe(full_df.dropna(how='all', subset=top_names).head(100), use_container_width=True)
+        with st.expander("🔍 ดูตารางข้อมูลดิบ"):
+            st.dataframe(full_df.head(100), use_container_width=True)
 
         def apply_white_theme_style(fig, y_title, is_secondary=False):
             fig.update_layout(
@@ -198,7 +197,7 @@ if uploaded_files:
             if col in full_df.columns:
                 fig_top.add_trace(go.Scatter(
                     x=full_df["Datetime"], y=full_df[col], name=col, 
-                    mode="lines", connectgaps=True,
+                    mode="lines", connectgaps=False, # 💡 ปิดการเชื่อมเส้นข้ามช่วงขาดข้อมูล
                     line=dict(width=1.8, color=COLOR_PALETTE[idx]), 
                     hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
                 ))
@@ -213,7 +212,7 @@ if uploaded_files:
             if col in full_df.columns:
                 fig_bot.add_trace(go.Scatter(
                     x=full_df["Datetime"], y=full_df[col], name=col, 
-                    mode="lines", connectgaps=True,
+                    mode="lines", connectgaps=False,
                     line=dict(width=1.8, color=COLOR_PALETTE[idx]), 
                     hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
                 ))
@@ -225,9 +224,9 @@ if uploaded_files:
         st.subheader(f"🔥 Dryer Temperatures Timeline {num_files_str}")
         fig_dryer = make_subplots(specs=[[{"secondary_y": False}]])
         if "Dryer #1" in full_df.columns: 
-            fig_dryer.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["Dryer #1"], name="Dryer #1", mode="lines", connectgaps=True, line=dict(color="#2ecc71", width=2.0)))
+            fig_dryer.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["Dryer #1"], name="Dryer #1", mode="lines", connectgaps=False, line=dict(color="#2ecc71", width=2.0)))
         if "Dryer #2" in full_df.columns: 
-            fig_dryer.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["Dryer #2"], name="Dryer #2", mode="lines", connectgaps=True, line=dict(color="#e67e22", width=2.0)))
+            fig_dryer.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["Dryer #2"], name="Dryer #2", mode="lines", connectgaps=False, line=dict(color="#e67e22", width=2.0)))
         add_max_min_markers(fig_dryer, full_df, ["Dryer #1", "Dryer #2"])
         apply_white_theme_style(fig_dryer, "Temperature [°C]")
         st.plotly_chart(fig_dryer, use_container_width=True)
@@ -236,11 +235,11 @@ if uploaded_files:
         st.subheader(f"🧪 Oxygen Concentration & N2 Flow Timeline {num_files_str}")
         fig_o2_n2 = make_subplots(specs=[[{"secondary_y": True}]])
         if "O2 Exit" in full_df.columns: 
-            fig_o2_n2.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["O2 Exit"], name="O2 Exit", mode="lines", connectgaps=True, line=dict(color="#e74c3c", width=2.0)), secondary_y=False)
+            fig_o2_n2.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["O2 Exit"], name="O2 Exit", mode="lines", connectgaps=False, line=dict(color="#e74c3c", width=2.0)), secondary_y=False)
         if "O2 Entrance" in full_df.columns: 
-            fig_o2_n2.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["O2 Entrance"], name="O2 Entrance", mode="lines", connectgaps=True, line=dict(color="#3498db", width=2.0)), secondary_y=False)
+            fig_o2_n2.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["O2 Entrance"], name="O2 Entrance", mode="lines", connectgaps=False, line=dict(color="#3498db", width=2.0)), secondary_y=False)
         if "N2 Flow" in full_df.columns: 
-            fig_o2_n2.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["N2 Flow"], name="N2 Flow", mode="lines", connectgaps=True, line=dict(color="#2ecc71", width=1.5, dash="dash")), secondary_y=True)
+            fig_o2_n2.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["N2 Flow"], name="N2 Flow", mode="lines", connectgaps=False, line=dict(color="#2ecc71", width=1.5, dash="dash")), secondary_y=True)
         add_max_min_markers(fig_o2_n2, full_df, ["O2 Exit", "O2 Entrance", "N2 Flow"], secondary_y_cols=["N2 Flow"])
         apply_white_theme_style(fig_o2_n2, "O2 Level [ppm]")
         fig_o2_n2.update_yaxes(title_text="N2 Flow", autorange=True, secondary_y=True, showgrid=False)
@@ -250,7 +249,7 @@ if uploaded_files:
         st.subheader(f"💧 Dew Point Timeline {num_files_str}")
         fig_dew = make_subplots(specs=[[{"secondary_y": False}]])
         if "Dew Point" in full_df.columns: 
-            fig_dew.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["Dew Point"], name="Dew Point", mode="lines", connectgaps=True, line=dict(color="#9b59b6", width=2.0)))
+            fig_dew.add_trace(go.Scatter(x=full_df["Datetime"], y=full_df["Dew Point"], name="Dew Point", mode="lines", connectgaps=False, line=dict(color="#9b59b6", width=2.0)))
         add_max_min_markers(fig_dew, full_df, ["Dew Point"])
         apply_white_theme_style(fig_dew, "Dew Point [°Cdp]")
         st.plotly_chart(fig_dew, use_container_width=True)
