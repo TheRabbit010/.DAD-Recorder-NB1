@@ -5,30 +5,32 @@ import re
 from datetime import datetime
 
 # ==========================================
-# 1. ตั้งค่าหน้าจอและการจัดการ State
+# 1. ตั้งค่าหน้าจอ
 # ==========================================
 st.set_page_config(layout="centered", page_title="DAD to CSV Converter")
 st.title("📄 DAD Raw Data to CSV")
-st.markdown("ดึงข้อมูลดิบ (Raw Data) จากไฟล์ `.DAD` แบบ 100% ไม่มีการตัดค่าทิ้ง")
+st.markdown("ดึงข้อมูลดิบ (Raw Data) แก้ไขปัญหาข้อมูลเลื่อนข้ามคอลัมน์")
 
 def clear_data_state():
     if "converted_df" in st.session_state:
         del st.session_state["converted_df"]
 
 # ==========================================
-# 2. โครงสร้างไฟล์ .DAD
+# 2. โครงสร้างไฟล์ .DAD (💡 แก้ไขจุดสำคัญที่สุด)
 # ==========================================
 HEADER_OFFSET = 512
-TOTAL_CHANNELS = 90  
+# 💡 เปลี่ยนเป็น 88 ตามสมการการเลื่อนของข้อมูล (Stride Size)
+TOTAL_CHANNELS = 88  
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"
 
-# ใช้ Mapping ดั้งเดิม (Index เลขคู่)
+# ดึงเฉพาะคอลัมน์ MAX (เลขคี่) เพื่อให้ได้อุณหภูมิที่แท้จริง
 col_mapping = {
-    "Z#1 Top": 4, "Z#2 Top": 6, "Z#3 Top": 8, "Z#4 Top": 10, "Z#5 Top": 12, "Z#6 Top": 14, "Z#7 Top": 16,
-    "Z#1 Bottom": 18, "Z#2 Bottom": 20, "Z#3 Bottom": 22, "Z#4 Bottom": 24, "Z#5 Bottom": 26, "Z#6 Bottom": 28, "Z#7 Bottom": 30,
-    "O2 Exit": 32, "Dryer #1": 36, "Dryer #2": 38, 
-    "N2 Flow": 84, "O2 Entrance": 88, "Dew Point": 86
+    "Z#1 Top": 5, "Z#2 Top": 7, "Z#3 Top": 9, "Z#4 Top": 11, "Z#5 Top": 13, "Z#6 Top": 15, "Z#7 Top": 17,
+    "Z#1 Bottom": 19, "Z#2 Bottom": 21, "Z#3 Bottom": 23, "Z#4 Bottom": 25, "Z#5 Bottom": 27, "Z#6 Bottom": 29, "Z#7 Bottom": 31,
+    "O2 Exit": 33, "Dryer #1": 37, "Dryer #2": 39, 
+    "N2 Flow": 85, "Dew Point": 87 
+    # หมายเหตุ: O2 Entrance (89) ถูกตัดออกเพราะขนาดบรรทัดจริงมีแค่ 88 ช่อง (Index 0-87)
 }
 
 def extract_start_time_from_filename(filename):
@@ -45,7 +47,7 @@ def extract_start_time_from_filename(filename):
     return pd.to_datetime("today").replace(microsecond=0)
 
 # ==========================================
-# 3. อัปโหลดและประมวลผล (อ่านข้อมูลดิบ)
+# 3. อัปโหลดและประมวลผล (อ่านข้อมูลดิบแบบบรรทัดต่อบรรทัด)
 # ==========================================
 uploaded_files = st.file_uploader("อัปโหลดไฟล์ .DAD ที่นี่", type=["dad", "DAD"], accept_multiple_files=True, on_change=clear_data_state)
 
@@ -65,14 +67,14 @@ if uploaded_files and "converted_df" not in st.session_state:
 
                 usable_points = points_per_channel * TOTAL_CHANNELS
                 
-                # 💡 แก้ไขสำคัญ: ต้องใช้ order='F' เพื่อให้ช่องสัญญาณไม่สลับกัน
-                reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='F')
+                # 💡 ใช้ order='C' (อ่านทีละบรรทัด) ร่วมกับ Width = 88 
+                reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='C')
                 reshaped_data = reshaped_data / SCALE_DIVIDER
 
                 data_dict = {}
                 for ch_name, col_idx in col_mapping.items():
                     if col_idx < TOTAL_CHANNELS:
-                        # 💡 เอาตัวกรองข้อมูลออกทั้งหมด ดึงข้อมูลดิบมาใส่ตรงๆ
+                        # ดึงข้อมูลดิบ ไม่มีการตัดค่า (No Filter)
                         data_dict[ch_name] = reshaped_data[:, col_idx]
 
                 df_single = pd.DataFrame(data_dict)
@@ -95,18 +97,18 @@ if uploaded_files and "converted_df" not in st.session_state:
 if "converted_df" in st.session_state:
     df_ready = st.session_state["converted_df"]
     
-    st.success("✅ โหลดข้อมูลดิบครบ 100% ไม่มีช่องโหว่!")
+    st.success("✅ โหลดข้อมูลสำเร็จ! ข้อมูลไม่เลื่อนทับกันแล้ว")
     
     st.divider()
     st.subheader("📊 พรีวิวตารางข้อมูลดิบ (Raw Data)")
-    st.dataframe(df_ready.head(50), use_container_width=True)
+    st.dataframe(df_ready.head(100), use_container_width=True)
 
     csv_data = df_ready.to_csv(index=False).encode('utf-8-sig')
     
     st.download_button(
         label="📥 ดาวน์โหลดไฟล์ CSV",
         data=csv_data,
-        file_name=f"DAD_RAW_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        file_name=f"DAD_RAW_Fixed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         type="primary",
         use_container_width=True
