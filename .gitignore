@@ -1,0 +1,10 @@
+# Python environment artifacts
+__pycache__/
+*.pyc
+
+# Local data files (ป้องกันไม่ให้ไฟล์ .DAD ของจริงและไฟล์ผลลัพธ์หลุดขึ้น Git)
+*.DAD
+*.csv
+*.xlsx
+.venv/
+venv/
