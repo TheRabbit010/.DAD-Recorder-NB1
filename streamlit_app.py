@@ -7,33 +7,35 @@ from datetime import datetime
 # ==========================================
 # 1. ตั้งค่าหน้าจอ
 # ==========================================
-st.set_page_config(layout="wide", page_title="Yokogawa DX2000 .DAD to CSV")
-st.title("📄 Yokogawa DX2000 (.DAD to CSV Converter)")
-st.markdown("แก้ไข Stride Error ขั้นสุดท้าย: ล็อกความกว้างข้อมูลที่ 48 ช่อง (ตรงเป๊ะ 100%)")
+st.set_page_config(layout="wide", page_title="Yokogawa .DAD Binary Tuner")
+st.title("🛠️ เครื่องมือปรับจูนและสกัดข้อมูลไฟล์ .DAD")
+st.markdown("""
+**วิธีใช้งาน:**
+1. อัปโหลดไฟล์ .DAD
+2. สังเกตตารางด้านล่าง หากข้อมูล **"ไหลเฉียงข้ามคอลัมน์"** ให้ลองปรับค่า **ความกว้างบรรทัด** ด้านซ้ายมือ (ลอง 44, 46, 48 หรือ 90, 92)
+3. ปรับจนกว่าค่าอุณหภูมิ (เช่น 580-600°C) จะเรียงตรงดิ่งอยู่ในคอลัมน์เดียวกัน
+4. หากตัวเลขเรียงตรงแล้ว แต่ค่าดูแปลกๆ ให้ลองขยับ **Header Offset** (ทีละ 2)
+5. เมื่อข้อมูลตรงเป๊ะแล้ว กดปุ่มดาวน์โหลด CSV ได้เลย!
+""")
 
 def clear_data_state():
     if "converted_df" in st.session_state:
         del st.session_state["converted_df"]
 
 # ==========================================
-# 2. โครงสร้างไบนารีที่ถูกต้องที่สุด (Mathematical Proven)
+# 2. แถบตั้งค่าด้านข้าง (Tuner Tools)
 # ==========================================
-HEADER_OFFSET = 512
-# 💡 กุญแจสำคัญ: ขนาดความกว้างที่แท้จริงคือ 48 (24 คู่ MIN/MAX)
-TOTAL_CHANNELS = 48   
-SCALE_DIVIDER = 10.0
-DTYPE_STR = ">i2"
+st.sidebar.header("⚙️ ปรับจูนโครงสร้างไฟล์")
+st.sidebar.markdown("ปรับค่าด้านล่าง ตารางจะอัปเดตให้ดูทันที!")
 
-# ชื่อจุดวัดสำหรับช่องสัญญาณหลัก
-ch_names = {
-    1: "Z#1 Top",     2: "Z#2 Top",     3: "Z#3 Top",     4: "Z#4 Top",
-    5: "Z#5 Top",     6: "Z#6 Top",     7: "Z#7 Top",
-    8: "Z#1 Bottom",  9: "Z#2 Bottom",  10: "Z#3 Bottom", 11: "Z#4 Bottom",
-    12: "Z#5 Bottom", 13: "Z#6 Bottom", 14: "Z#7 Bottom",
-    15: "O2 Exit",    16: "Dryer #1",   17: "Dryer #2",
-    18: "N2 Flow",    19: "O2 Entrance", 20: "Dew Point"
-}
+header_offset = st.sidebar.number_input("1. Header Offset (เริ่มอ่านที่ไบต์)", min_value=0, max_value=8192, value=512, step=2)
+total_channels = st.sidebar.number_input("2. ความกว้างบรรทัด (Total Channels)", min_value=10, max_value=200, value=46, step=1)
+skip_channels = st.sidebar.number_input("3. ตัดข้อมูลส่วนหัวบรรทัดทิ้ง (Skip Ch.)", min_value=0, max_value=20, value=0, step=1)
+scale_divider = st.sidebar.number_input("4. ตัวหารทศนิยม (Scale)", min_value=1.0, max_value=100.0, value=10.0, step=1.0)
 
+# ==========================================
+# 3. ฟังก์ชันดึงเวลา
+# ==========================================
 def extract_start_time_from_filename(filename):
     matches = re.findall(r'\d{6}', filename)
     if len(matches) >= 2:
@@ -48,57 +50,45 @@ def extract_start_time_from_filename(filename):
     return pd.to_datetime("today").replace(microsecond=0)
 
 # ==========================================
-# 3. อัปโหลดและประมวลผล
+# 4. อัปโหลดและประมวลผล
 # ==========================================
-uploaded_files = st.file_uploader("อัปโหลดไฟล์ .DAD ที่นี่", type=["dad", "DAD"], accept_multiple_files=True, on_change=clear_data_state)
+uploaded_files = st.file_uploader("อัปโหลดไฟล์ .DAD ที่นี่", type=["dad", "DAD"], accept_multiple_files=True)
 
-if uploaded_files and "converted_df" not in st.session_state:
+if uploaded_files:
     all_dfs = []
     
-    with st.spinner("กำลังแปลงไฟล์... (ล็อกความกว้างที่ 48 ช่อง)"):
+    with st.spinner("กำลังประมวลผลและสร้างตาราง..."):
         for file in uploaded_files:
             try:
                 start_dt = extract_start_time_from_filename(file.name)
                 
                 binary_data = file.read()
-                raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
                 
-                points_per_channel = len(raw_signals) // TOTAL_CHANNELS
+                # ตรวจสอบขนาดไฟล์ก่อนอ่าน
+                if len(binary_data) <= header_offset:
+                    st.warning(f"ไฟล์ {file.name} มีขนาดเล็กกว่า Header Offset ที่ตั้งไว้")
+                    continue
+                    
+                raw_signals = np.frombuffer(binary_data, dtype=np.dtype(">i2"), offset=header_offset).astype(float)
+                
+                points_per_channel = len(raw_signals) // total_channels
                 if points_per_channel == 0: continue
 
-                usable_points = points_per_channel * TOTAL_CHANNELS
+                usable_points = points_per_channel * total_channels
                 
                 # อ่านแบบเรียงบรรทัด (order='C')
-                reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='C')
-                reshaped_data = reshaped_data / SCALE_DIVIDER
+                reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, total_channels), order='C')
+                reshaped_data = reshaped_data / scale_divider
 
-                data_dict = {}
+                # สร้างชื่อคอลัมน์
+                col_names = [f"CH_{str(i+1).zfill(3)}" for i in range(total_channels - skip_channels)]
                 
-                # เราจะสกัดข้อมูลออกมาทั้งหมด 24 คู่ (48 ช่อง) เพื่อไม่ให้มีข้อมูลหลุดหาย
-                num_logical_channels = TOTAL_CHANNELS // 2
+                # ตัดคอลัมน์ที่ไม่ต้องการออกจากด้านหน้า (ถ้ามีการตั้งค่า Skip)
+                data_to_df = reshaped_data[:, skip_channels:]
                 
-                for ch_num in range(1, num_logical_channels + 1):
-                    ch_str = str(ch_num).zfill(3)
-                    
-                    # ถ้าช่องนี้มีชื่อตั้งไว้ ให้ใส่ชื่อ ถ้าไม่มีให้คงชื่อ CH ไว้เฉยๆ
-                    if ch_num in ch_names:
-                        tag_name = ch_names[ch_num]
-                        col_min = f"CH{ch_str} [{tag_name}]_MIN"
-                        col_max = f"CH{ch_str} [{tag_name}]_MAX"
-                    else:
-                        col_min = f"CH{ch_str}_MIN"
-                        col_max = f"CH{ch_str}_MAX"
-                    
-                    min_col_idx = (ch_num - 1) * 2      # Index คู่
-                    max_col_idx = (ch_num - 1) * 2 + 1  # Index คี่
-                    
-                    # ดึงข้อมูลมาตรงๆ ไม่ตัดอะไรทิ้ง
-                    data_dict[col_min] = reshaped_data[:, min_col_idx]
-                    data_dict[col_max] = reshaped_data[:, max_col_idx]
-
-                df_single = pd.DataFrame(data_dict)
+                df_single = pd.DataFrame(data_to_df, columns=col_names)
                 
-                # สร้างคอลัมน์ วัน เวลา และ sec ตามรูปแบบ DAQSTANDARD
+                # สร้างคอลัมน์ วัน เวลา และ sec 
                 time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq="10s")
                 df_single.insert(0, "sec", 0.0)
                 df_single.insert(0, "Time", time_axis.strftime('%H:%M:%S'))
@@ -113,28 +103,21 @@ if uploaded_files and "converted_df" not in st.session_state:
         if all_dfs:
             full_df = pd.concat(all_dfs, ignore_index=True)
             full_df = full_df.drop_duplicates(subset=["Datetime"]).reset_index(drop=True)
-            st.session_state["converted_df"] = full_df
+            
+            st.success("✅ แปลงไฟล์สำเร็จ! ลองเลื่อนดูตารางด้านล่างว่าคอลัมน์ตรงหรือยังครับ")
+            
+            st.divider()
+            st.subheader("📊 พรีวิวตารางข้อมูลดิบ (Tuner Preview)")
+            # แสดงข้อมูลเพื่อเช็คความตรงของคอลัมน์
+            st.dataframe(full_df.head(100), use_container_width=True)
 
-# ==========================================
-# 4. แสดงผลและสร้างปุ่มดาวน์โหลด
-# ==========================================
-if "converted_df" in st.session_state:
-    df_ready = st.session_state["converted_df"]
-    
-    st.success("✅ แปลงไฟล์สำเร็จ! ข้อมูลไม่ไหลเฉียงแล้ว 100%")
-    
-    st.divider()
-    st.subheader("📊 พรีวิวตารางข้อมูล (ตรวจสอบความถูกต้อง)")
-    # แสดง 15 คอลัมน์แรกให้ดูบนเว็บ
-    st.dataframe(df_ready.iloc[:, :15].head(100), use_container_width=True)
-
-    csv_data = df_ready.to_csv(index=False).encode('utf-8-sig')
-    
-    st.download_button(
-        label="📥 ดาวน์โหลดไฟล์ CSV",
-        data=csv_data,
-        file_name=f"DAQSTANDARD_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv",
-        type="primary",
-        use_container_width=True
-    )
+            csv_data = full_df.to_csv(index=False).encode('utf-8-sig')
+            
+            st.download_button(
+                label="📥 ดาวน์โหลดไฟล์ CSV ที่ปรับจูนแล้ว",
+                data=csv_data,
+                file_name=f"DAD_Tuned_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                type="primary",
+                use_container_width=True
+            )
