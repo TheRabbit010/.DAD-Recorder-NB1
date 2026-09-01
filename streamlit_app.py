@@ -14,6 +14,15 @@ st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
 st.title("📊 DAD Time-Series Visualizer")
 
 # ==========================================
+# 🔄 ฟังก์ชันเคลียร์ข้อมูลเก่าอัตโนมัติ
+# ==========================================
+def clear_old_data():
+    """ล้างข้อมูลและ cache เก่าใน session_state ทั้งหมดเมื่อมีการเปลี่ยนไฟล์"""
+    for key in list(st.session_state.keys()):
+        if key != "dad_file_uploader":  # เว้น key ของ file uploader ไว้
+            del st.session_state[key]
+
+# ==========================================
 # 2. แถบตั้งค่าด้านข้าง (Sidebar)
 # ==========================================
 st.sidebar.header("⚙️ การแสดงผล (Display Options)")
@@ -22,9 +31,14 @@ show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Sh
 
 st.sidebar.divider()
 st.sidebar.header("⏱️ การตั้งค่าเวลา (Time Settings)")
-# ให้ผู้ใช้กำหนด Sample rate แทนการคำนวณยืดเวลาอัตโนมัติ ป้องกันกราฟทับซ้อนเวลามี Gap ระหว่างไฟล์
 sample_rate_sec = st.sidebar.number_input("ความถี่ในการบันทึก (วินาที/Record)", min_value=0.1, value=1.0, step=0.1, 
                                           help="ระบุความเร็วในการดึงข้อมูลของเครื่อง (เช่น 1 วินาที)")
+
+st.sidebar.divider()
+# ปุ่มสำหรับกดล้างข้อมูลเองด้วยตนเอง (Manual Reset)
+if st.sidebar.button("🗑️ ล้างข้อมูลทั้งหมด (Clear Data)", use_container_width=True, type="secondary"):
+    clear_old_data()
+    st.rerun()
 
 # ==========================================
 # 3. โครงสร้าง Mapping สัญญาณ
@@ -82,19 +96,23 @@ def extract_start_time_from_filename(filename):
     return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0), False
 
 # ==========================================
-# 4. การจัดการและรวมไฟล์
+# 4. การจัดการและรวมไฟล์ (เปิดใช้งาน Auto-Clear)
 # ==========================================
-uploaded_files = st.file_uploader("เลือกไฟล์ .DAD", type=["dad", "DAD"], accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "เลือกไฟล์ .DAD", 
+    type=["dad", "DAD"], 
+    accept_multiple_files=True,
+    key="dad_file_uploader",
+    on_change=clear_old_data  # 👈 เรียกใช้ฟังก์ชันล้างข้อมูลทันทีเมื่อเปลี่ยนไฟล์
+)
 
 if uploaded_files:
-    # 💡 แก้ไข: เรียงลำดับไฟล์ตาม Datetime จริงๆ แทนการเรียงตามตัวอักษร
+    # เรียงลำดับไฟล์ตาม Datetime จริง
     parsed_files = []
     for f in uploaded_files:
         dt, is_valid = extract_start_time_from_filename(f.name)
-        # ถ้าดึงเวลาไม่ได้ ให้เอาไปไว้ท้ายสุด
         parsed_files.append((f, dt if is_valid else datetime.max))
     
-    # Sort ด้วย datetime (ตำแหน่งที่ 1 ใน tuple)
     parsed_files.sort(key=lambda x: x[1])
     sorted_files = [item[0] for item in parsed_files]
 
@@ -120,26 +138,22 @@ if uploaded_files:
                 ch_name = ch_info[ch_num]
                 val_array = reshaped_data[:, col_idx]
                 
-                # 💡 แก้ไข: กรองค่าที่เป็น 0.0 ออก สำหรับกลุ่มอุณหภูมิ (แก้ปัญหากราฟดิ่งลง 0 แล้ววิ่งกลับขึ้นไป)
+                # กรองค่าขยะ 0.0 ของกลุ่มอุณหภูมิออก
                 if "Top" in ch_name or "Bottom" in ch_name or "Dryer" in ch_name:
-                    # อุณหภูมิเตาไม่น่าจะติดลบ หรือเป็น 0 (กรองค่า <= 0 ออกเป็น NaN)
                     val_array = np.where((val_array <= 0.0) | (val_array > 3500.0), np.nan, val_array)
                 else:
-                    # สำหรับ N2, O2, Dew Point อนุญาตให้มีค่า 0 หรือติดลบได้
                     val_array = np.where((val_array < -500.0) | (val_array > 3500.0), np.nan, val_array)
                     
                 data_dict[ch_name] = val_array
 
             df_single = pd.DataFrame(data_dict)
 
-            # กำหนดแกนเวลาตาม Sample Rate คงที่ ที่ตั้งใน Sidebar
             start_dt, _ = extract_start_time_from_filename(file.name)
             time_freq = f"{int(sample_rate_sec * 1000)}ms"
             time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq=time_freq)
             
             df_single.insert(0, "Datetime", time_axis)
             
-            # เติมเต็มช่องว่างที่ถูกแทนที่ด้วย NaN ให้เส้นเชื่อมกันสมูท
             for col in df_single.columns[1:]:
                 df_single[col] = df_single[col].interpolate(method='linear', limit_direction='both')
                 
@@ -152,14 +166,13 @@ if uploaded_files:
     # 5. การแสดงผลกราฟ
     # ==========================================
     if all_dfs:
-        # รวมไฟล์ จัดเรียงตามเวลา และลบแถวที่เวลาซ้ำซ้อน
         full_df = pd.concat(all_dfs, ignore_index=True)
         full_df = full_df.sort_values(by="Datetime").reset_index(drop=True)
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
         num_files_str = f"({len(sorted_files)} Files)"
 
-        # 📥 Export Section (Sidebar)
+        # 📥 Export Section
         st.sidebar.divider()
         st.sidebar.header("📥 ดาวน์โหลดข้อมูล")
         csv_data = full_df.to_csv(index=False).encode('utf-8-sig')
@@ -171,7 +184,7 @@ if uploaded_files:
             use_container_width=True
         )
 
-        with st.expander("🔍 ดูตารางข้อมูลดิบ (แก้ไขข้อมูล 0.0 เรียบร้อย)"):
+        with st.expander("🔍 ดูตารางข้อมูลดิบ"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
@@ -214,7 +227,6 @@ if uploaded_files:
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
         add_max_min_markers(fig_top, full_df, top_names)
-        # ปรับ range อัตโนมัติในกรณีอุณหภูมิเปลี่ยนไปจากเดิม
         apply_white_theme_style(fig_top, "Temperature [°C]", y_range=None) 
         st.plotly_chart(fig_top, use_container_width=True)
 
