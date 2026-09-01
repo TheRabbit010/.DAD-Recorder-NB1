@@ -5,19 +5,19 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ==========================================
 # 1. ตั้งค่าหน้าจอ
 # ==========================================
 st.set_page_config(layout="wide", page_title="DAD Timeline Visualizer")
-st.title("📊 DAD Time-Series Visualizer")
+st.title("📊 DAD Time-Series Visualizer (Direct .DAD)")
 
 # ==========================================
 # 🔄 ฟังก์ชันเคลียร์ข้อมูลเก่าอัตโนมัติ
 # ==========================================
 def clear_old_data():
-    """ล้างข้อมูลและ cache เก่าใน session_state ทั้งหมดเมื่อมีการเลือกหรือเปลี่ยนไฟล์ใหม่"""
+    """ล้างข้อมูลและ cache เก่าใน session_state ทั้งหมดเมื่อเปลี่ยนไฟล์"""
     for key in list(st.session_state.keys()):
         if key != "dad_file_uploader":
             del st.session_state[key]
@@ -30,7 +30,7 @@ show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Sh
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 st.sidebar.divider()
-st.sidebar.success("⏱️ **ระบบเวลา:** ดึงวันเวลาเริ่มต้นจากไฟล์ที่เลือก และเพิ่มขึ้น **บรรทัดละ 10 วินาที (+10s)** อัตโนมัติ")
+st.sidebar.success("⏱️ **ระบบเวลา:**\nดึงเวลาเริ่มต้นจากชื่อไฟล์ และเพิ่มขึ้น **บรรทัดละ 10 วินาที (+10s)** อัตโนมัติ (อิงตามข้อมูลจริงในเครื่อง)")
 
 st.sidebar.divider()
 if st.sidebar.button("🗑️ ล้างข้อมูลทั้งหมด (Clear Data)", use_container_width=True, type="secondary"):
@@ -38,7 +38,7 @@ if st.sidebar.button("🗑️ ล้างข้อมูลทั้งหม�
     st.rerun()
 
 # ==========================================
-# 3. โครงสร้าง Mapping สัญญาณ
+# 3. โครงสร้าง Mapping สัญญาณ (.DAD Binary)
 # ==========================================
 col_mapping = {
     1: 4,   2: 6,   3: 8,   4: 10,  5: 12,  6: 14,  7: 16,  # Top Zones
@@ -72,8 +72,7 @@ COLOR_PALETTE = [
 ]
 
 def extract_start_time_from_filename(filename):
-    """ ดึงวันและเวลาเริ่มต้นจริงจากชื่อไฟล์ """
-    # ค้นหากลุ่มตัวเลข 6 หลัก (เช่น YYMMDD และ HHMMSS)
+    """ ดึงวันและเวลาเริ่มต้นจากชื่อไฟล์ """
     matches = re.findall(r'\d{6}', filename)
     if len(matches) >= 2:
         d_str, t_str = matches[-2], matches[-1]
@@ -92,11 +91,10 @@ def extract_start_time_from_filename(filename):
         except ValueError:
             pass
             
-    # กรณีดึงจากชื่อไฟล์ไม่ได้ ให้ใช้วันเวลาปัจจุบันเป็นค่าตั้งต้น
     return pd.to_datetime("today").replace(microsecond=0), False
 
 # ==========================================
-# 4. การจัดการและรวมไฟล์
+# 4. โหลดและจัดการไฟล์ .DAD
 # ==========================================
 uploaded_files = st.file_uploader(
     "เลือกไฟล์ .DAD", 
@@ -107,19 +105,19 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    # 1. ถอดเวลาเริ่มต้นจริงของแต่ละไฟล์ แล้วนำมาเรียงลำดับไฟล์ตามเวลาจริง
+    # 1. เรียงไฟล์ตามเวลาเริ่มต้นจริงที่ถอดได้จากชื่อไฟล์
     parsed_files = []
     for f in uploaded_files:
         start_dt, is_valid = extract_start_time_from_filename(f.name)
         parsed_files.append((f, start_dt, is_valid))
     
-    # เรียงลำดับไฟล์ตามเวลาเริ่มต้นจริง
     parsed_files.sort(key=lambda x: x[1])
 
     all_dfs = []
     
     for file, start_dt, is_valid in parsed_files:
         try:
+            # อ่านไบนารี
             binary_data = file.read()
             raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
             
@@ -130,6 +128,7 @@ if uploaded_files:
                 continue
 
             usable_points = points_per_channel * TOTAL_CHANNELS
+            # ใช้ order='F' ตามโครงสร้าง Data Logger ดั้งเดิมของคุณ
             reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='F')
             reshaped_data = reshaped_data / SCALE_DIVIDER
 
@@ -138,7 +137,7 @@ if uploaded_files:
                 ch_name = ch_info[ch_num]
                 val_array = reshaped_data[:, col_idx]
                 
-                # กรองค่าขยะ 0.0 ของกลุ่มอุณหภูมิออก ป้องกันกราฟดิ่งลงล่าง
+                # 💡 แก้ไข Zigzag: กรองค่า Error 0.0 สำหรับอุณหภูมิออกให้เป็น NaN 
                 if "Top" in ch_name or "Bottom" in ch_name or "Dryer" in ch_name:
                     val_array = np.where((val_array <= 0.0) | (val_array > 3500.0), np.nan, val_array)
                 else:
@@ -148,11 +147,11 @@ if uploaded_files:
 
             df_single = pd.DataFrame(data_dict)
 
-            # 🎯 กำหนดเวลาเริ่มต้นจริงจากไฟล์ แล้วบวกเพิ่มทีละ 10 วินาทีตามจำนวนบรรทัด (10s step)
+            # 🎯 กำหนดเวลาเริ่มต้นจากไฟล์ และบังคับเพิ่มทีละ 10 วินาทีตามตารางจริง (10s)
             time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq="10s")
             df_single.insert(0, "Datetime", time_axis)
             
-            # Interpolate เติมช่องว่างข้อมูลที่ถูกกรองออก
+            # เชื่อมจุดที่หายไป (NaN ที่เกิดจากค่า 0.0) เพื่อให้เส้นกราฟลากต่อกันสมบูรณ์
             for col in df_single.columns[1:]:
                 df_single[col] = df_single[col].interpolate(method='linear', limit_direction='both')
                 
@@ -166,6 +165,7 @@ if uploaded_files:
     # ==========================================
     if all_dfs:
         full_df = pd.concat(all_dfs, ignore_index=True)
+        # จัดเรียงเวลาอีกครั้งเพื่อป้องกันการลากเส้นย้อนกลับ
         full_df = full_df.sort_values(by="Datetime").reset_index(drop=True)
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
@@ -183,7 +183,7 @@ if uploaded_files:
             use_container_width=True
         )
 
-        with st.expander("🔍 ดูตารางข้อมูลดิบ (เวลาเริ่มต้นจริง + เพิ่มบรรทัดละ 10 วินาที)"):
+        with st.expander("🔍 ดูตารางข้อมูลดิบ (เวลา +10 วินาที, ไร้ค่า 0.0)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
@@ -222,6 +222,7 @@ if uploaded_files:
         for idx, col in enumerate(top_names):
             fig_top.add_trace(go.Scatter(
                 x=full_df["Datetime"], y=full_df[col], name=col,
+                mode="lines", # ใช้ lines อย่างเดียว หรือ lines+markers ก็ได้
                 line=dict(width=1.8, color=COLOR_PALETTE[idx % len(COLOR_PALETTE)]),
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
@@ -234,6 +235,7 @@ if uploaded_files:
         for idx, col in enumerate(bot_names):
             fig_bot.add_trace(go.Scatter(
                 x=full_df["Datetime"], y=full_df[col], name=col,
+                mode="lines",
                 line=dict(width=1.8, color=COLOR_PALETTE[idx % len(COLOR_PALETTE)]),
                 hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
             ))
