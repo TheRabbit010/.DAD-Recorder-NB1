@@ -7,29 +7,21 @@ from datetime import datetime
 # ==========================================
 # 1. ตั้งค่าหน้าจอ
 # ==========================================
-st.set_page_config(layout="wide", page_title="DAD to CSV Converter")
-st.title("📄 DAD Raw Data to CSV")
-st.markdown("แปลงข้อมูลไบนารีเป็นตาราง (แก้ไขโครงสร้างคอลัมน์ตรงเป๊ะ 100%)")
+st.set_page_config(layout="wide", page_title="DAD Full Raw Data Extractor")
+st.title("📄 DAD Full Raw Data Extractor")
+st.markdown("ดึงข้อมูลดิบทั้งหมด 90 ช่องสัญญาณ (CH_00 ถึง CH_89) โดยไม่มีการฟิลเตอร์ใดๆ")
 
 def clear_data_state():
     if "converted_df" in st.session_state:
         del st.session_state["converted_df"]
 
 # ==========================================
-# 2. โครงสร้างไฟล์ .DAD ที่ถูกต้อง 100%
+# 2. โครงสร้างไฟล์ .DAD
 # ==========================================
 HEADER_OFFSET = 512
-TOTAL_CHANNELS = 90  # ยืนยันขนาดที่ 90 ช่องสัญญาณต่อ 1 บรรทัดเวลา
+TOTAL_CHANNELS = 90  # จำนวนช่องสัญญาณทั้งหมดต่อ 1 บรรทัด
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"
-
-# 💡 ใช้ Index เลขคี่ เพื่อดึงค่า "MAX" ซึ่งเป็นค่าอุณหภูมิจริงของเตา
-col_mapping = {
-    "Z#1 Top": 5, "Z#2 Top": 7, "Z#3 Top": 9, "Z#4 Top": 11, "Z#5 Top": 13, "Z#6 Top": 15, "Z#7 Top": 17,
-    "Z#1 Bottom": 19, "Z#2 Bottom": 21, "Z#3 Bottom": 23, "Z#4 Bottom": 25, "Z#5 Bottom": 27, "Z#6 Bottom": 29, "Z#7 Bottom": 31,
-    "O2 Exit": 33, "Dryer #1": 37, "Dryer #2": 39, 
-    "N2 Flow": 85, "Dew Point": 87, "O2 Entrance": 89
-}
 
 def extract_start_time_from_filename(filename):
     matches = re.findall(r'\d{6}', filename)
@@ -52,7 +44,7 @@ uploaded_files = st.file_uploader("อัปโหลดไฟล์ .DAD ที
 if uploaded_files and "converted_df" not in st.session_state:
     all_dfs = []
     
-    with st.spinner("กำลังถอดรหัสข้อมูล..."):
+    with st.spinner("กำลังสกัดข้อมูลทั้ง 90 ช่องสัญญาณ..."):
         for file in uploaded_files:
             try:
                 start_dt = extract_start_time_from_filename(file.name)
@@ -65,19 +57,19 @@ if uploaded_files and "converted_df" not in st.session_state:
 
                 usable_points = points_per_channel * TOTAL_CHANNELS
                 
-                # 💡 ใช้ order='C' (อ่านทีละบรรทัดแนวนอน) คู่กับขนาด 90
+                # อ่านแบบเรียงบรรทัด (order='C')
                 reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='C')
                 reshaped_data = reshaped_data / SCALE_DIVIDER
 
+                # 💡 ดึงข้อมูลทุกช่อง (0 ถึง 89) โดยตั้งชื่อคอลัมน์เป็น CH_00 ถึง CH_89
                 data_dict = {}
-                for ch_name, col_idx in col_mapping.items():
-                    if col_idx < TOTAL_CHANNELS:
-                        # ดึงข้อมูลมาตรงๆ โดยไม่ผ่านฟิลเตอร์ใดๆ
-                        data_dict[ch_name] = reshaped_data[:, col_idx]
+                for i in range(TOTAL_CHANNELS):
+                    col_name = f"CH_{str(i).zfill(2)}"
+                    data_dict[col_name] = reshaped_data[:, i]
 
                 df_single = pd.DataFrame(data_dict)
                 
-                # สร้างเวลาและบังคับรูปแบบให้ชัดเจน
+                # สร้างเวลา
                 time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq="10s")
                 df_single.insert(0, "Datetime", time_axis.strftime('%Y-%m-%d %H:%M:%S'))
                 
@@ -97,18 +89,18 @@ if uploaded_files and "converted_df" not in st.session_state:
 if "converted_df" in st.session_state:
     df_ready = st.session_state["converted_df"]
     
-    st.success("✅ โหลดข้อมูลสำเร็จ! คอลัมน์ตรงเผง 100% แล้วครับ")
+    st.success("✅ โหลดข้อมูลครบทั้ง 90 ช่องสัญญาณสำเร็จ!")
     
     st.divider()
-    st.subheader("📊 พรีวิวตารางข้อมูลดิบ (ตรวจสอบความถูกต้อง)")
+    st.subheader("📊 พรีวิวตารางข้อมูลดิบทั้งหมด (CH_00 ถึง CH_89)")
     st.dataframe(df_ready.head(100), use_container_width=True)
 
     csv_data = df_ready.to_csv(index=False).encode('utf-8-sig')
     
     st.download_button(
-        label="📥 ดาวน์โหลดไฟล์ CSV",
+        label="📥 ดาวน์โหลดไฟล์ CSV (90 Channels)",
         data=csv_data,
-        file_name=f"DAD_Clean_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        file_name=f"DAD_All_Channels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         type="primary",
         use_container_width=True
