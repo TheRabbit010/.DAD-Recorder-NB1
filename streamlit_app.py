@@ -8,8 +8,8 @@ from datetime import datetime
 # 1. ตั้งค่าหน้าจอ
 # ==========================================
 st.set_page_config(layout="wide", page_title="DAD Full Raw Data Extractor")
-st.title("📄 DAD Full Raw Data Extractor")
-st.markdown("ดึงข้อมูลดิบทั้งหมด 90 ช่องสัญญาณ (CH_00 ถึง CH_89) โดยไม่มีการฟิลเตอร์ใดๆ")
+st.title("📄 DAD Raw Data to CSV (with MIN/MAX)")
+st.markdown("ดึงข้อมูลดิบทั้งหมดแบบจับคู่ MIN/MAX (รวม 45 Channels x 2 = 90 คอลัมน์) โดยไม่มีการฟิลเตอร์ตัดทิ้ง")
 
 def clear_data_state():
     if "converted_df" in st.session_state:
@@ -19,7 +19,7 @@ def clear_data_state():
 # 2. โครงสร้างไฟล์ .DAD
 # ==========================================
 HEADER_OFFSET = 512
-TOTAL_CHANNELS = 90  # จำนวนช่องสัญญาณทั้งหมดต่อ 1 บรรทัด
+TOTAL_CHANNELS = 90  # จำนวนช่องข้อมูลดิบต่อบรรทัด
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"
 
@@ -44,7 +44,7 @@ uploaded_files = st.file_uploader("อัปโหลดไฟล์ .DAD ที
 if uploaded_files and "converted_df" not in st.session_state:
     all_dfs = []
     
-    with st.spinner("กำลังสกัดข้อมูลทั้ง 90 ช่องสัญญาณ..."):
+    with st.spinner("กำลังสกัดข้อมูลและจับคู่ MIN / MAX..."):
         for file in uploaded_files:
             try:
                 start_dt = extract_start_time_from_filename(file.name)
@@ -61,11 +61,17 @@ if uploaded_files and "converted_df" not in st.session_state:
                 reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='C')
                 reshaped_data = reshaped_data / SCALE_DIVIDER
 
-                # 💡 ดึงข้อมูลทุกช่อง (0 ถึง 89) โดยตั้งชื่อคอลัมน์เป็น CH_00 ถึง CH_89
+                # 💡 ตั้งชื่อคอลัมน์แบบจับคู่ MIN / MAX
                 data_dict = {}
-                for i in range(TOTAL_CHANNELS):
-                    col_name = f"CH_{str(i).zfill(2)}"
-                    data_dict[col_name] = reshaped_data[:, i]
+                num_logical_channels = TOTAL_CHANNELS // 2  # 90 / 2 = 45 ช่องสัญญาณ
+                
+                for i in range(num_logical_channels):
+                    ch_num = str(i + 1).zfill(3) # รูปแบบ CH001, CH002...
+                    min_idx = i * 2              # Index เลขคู่เป็น MIN
+                    max_idx = i * 2 + 1          # Index เลขคี่เป็น MAX
+                    
+                    data_dict[f"CH{ch_num}_MIN"] = reshaped_data[:, min_idx]
+                    data_dict[f"CH{ch_num}_MAX"] = reshaped_data[:, max_idx]
 
                 df_single = pd.DataFrame(data_dict)
                 
@@ -89,18 +95,18 @@ if uploaded_files and "converted_df" not in st.session_state:
 if "converted_df" in st.session_state:
     df_ready = st.session_state["converted_df"]
     
-    st.success("✅ โหลดข้อมูลครบทั้ง 90 ช่องสัญญาณสำเร็จ!")
+    st.success("✅ โหลดข้อมูลครบทั้งหมด (45 Channels แบ่งเป็น MIN/MAX) สำเร็จ!")
     
     st.divider()
-    st.subheader("📊 พรีวิวตารางข้อมูลดิบทั้งหมด (CH_00 ถึง CH_89)")
+    st.subheader("📊 พรีวิวตารางข้อมูลดิบ (MIN / MAX)")
     st.dataframe(df_ready.head(100), use_container_width=True)
 
     csv_data = df_ready.to_csv(index=False).encode('utf-8-sig')
     
     st.download_button(
-        label="📥 ดาวน์โหลดไฟล์ CSV (90 Channels)",
+        label="📥 ดาวน์โหลดไฟล์ CSV (ตาราง MIN / MAX)",
         data=csv_data,
-        file_name=f"DAD_All_Channels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        file_name=f"DAD_MINMAX_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         type="primary",
         use_container_width=True
