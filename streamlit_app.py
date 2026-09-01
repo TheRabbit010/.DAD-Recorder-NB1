@@ -116,7 +116,7 @@ if uploaded_files:
 
             usable_points = points_per_channel * TOTAL_CHANNELS
             
-            # 💡 สำคัญที่สุด: กลับมาใช้ order='F' เพื่อให้ช่องสัญญาณตรงตามเครื่อง
+            # ใช้ order='F' เพื่อให้ช่องสัญญาณตรงตามเครื่อง
             reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='F')
             reshaped_data = reshaped_data / SCALE_DIVIDER
 
@@ -148,13 +148,12 @@ if uploaded_files:
     # 5. การประมวลผลขั้นสุดท้ายและแสดงผลกราฟ
     # ==========================================
     if all_dfs:
-        # รวมไฟล์ทั้งหมด
         full_df = pd.concat(all_dfs, ignore_index=True)
         
-        # 💡 ไม้ตาย: จัดระเบียบเวลาใหม่ให้ลงล็อกทุกๆ 10 วินาที ป้องกันเวลากระโดดหรือเหลื่อมกัน
+        # 💡 แก้ไข Error: เปลี่ยน "10S" เป็น "10s" (s เล็ก) และเพิ่ม numeric_only=True
         full_df = full_df.set_index("Datetime")
-        full_df = full_df.resample("10S").mean() # นำค่าเฉลี่ยมาใช้หากมีเวลาทับซ้อนกัน
-        full_df = full_df.interpolate(method='linear', limit_direction='both') # เชื่อมจุดที่หายไป
+        full_df = full_df.resample("10s").mean(numeric_only=True)
+        full_df = full_df.interpolate(method='linear', limit_direction='both')
         full_df = full_df.reset_index()
 
         num_files_str = f"({len(parsed_files)} Files)"
@@ -200,7 +199,7 @@ if uploaded_files:
             if col in full_df.columns:
                 fig_top.add_trace(go.Scatter(
                     x=full_df["Datetime"], y=full_df[col], name=col,
-                    mode="lines", connectgaps=True, # 💡 บังคับลากเส้นเชื่อมกัน
+                    mode="lines", connectgaps=True,
                     line=dict(width=1.8, color=COLOR_PALETTE[idx]),
                     hovertemplate=f"{col}: %{{y:.1f}} °C<extra></extra>"
                 ))
