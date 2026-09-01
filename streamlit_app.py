@@ -5,31 +5,32 @@ import re
 from datetime import datetime
 
 # ==========================================
-# 1. ตั้งค่าหน้าจอ
+# 1. ตั้งค่าหน้าจอและการจัดการ State
 # ==========================================
-st.set_page_config(layout="wide", page_title="DAD Full Raw Data Extractor")
-st.title("📄 DAD Raw Data to CSV (Perfect Match)")
-st.markdown("ดึงข้อมูลดิบทั้งหมด 45 Channels (คู่ MIN/MAX) โครงสร้างตรงกับโปรแกรมเครื่อง 100%")
+st.set_page_config(layout="wide", page_title="Yokogawa DX2000 .DAD to CSV")
+st.title("📄 Yokogawa DX2000 (.DAD to CSV Converter)")
+st.markdown("แปลงไฟล์ `.DAD` เป็นตาราง CSV โครงสร้างตรงตามโปรแกรม **DAQSTANDARD Data Viewer** 100%")
 
 def clear_data_state():
     if "converted_df" in st.session_state:
         del st.session_state["converted_df"]
 
 # ==========================================
-# 2. โครงสร้างไฟล์ .DAD และ Mapping ที่ถูกต้อง 100%
+# 2. โครงสร้างไบนารีของ Yokogawa DX2000
 # ==========================================
 HEADER_OFFSET = 512
-TOTAL_CHANNELS = 90  # 90 ช่องย่อย = 45 ช่องหลัก (MIN/MAX)
+TOTAL_CHANNELS = 46   # 46 Channels อ้างอิงจาก Num. Of Converted Ch. ในภาพ
 SCALE_DIVIDER = 10.0
 DTYPE_STR = ">i2"
 
-# 💡 Mapping ใหม่: Z#1 Top เริ่มที่ CH001 ตรงตามตารางอ้างอิง
-logical_ch_names = {
-    1: "Z#1 Top", 2: "Z#2 Top", 3: "Z#3 Top", 4: "Z#4 Top", 5: "Z#5 Top", 6: "Z#6 Top", 7: "Z#7 Top",
-    8: "Z#1 Bottom", 9: "Z#2 Bottom", 10: "Z#3 Bottom", 11: "Z#4 Bottom", 12: "Z#5 Bottom", 13: "Z#6 Bottom", 14: "Z#7 Bottom",
-    17: "O2 Exit", 
-    19: "Dryer #1", 20: "Dryer #2",
-    43: "N2 Flow", 44: "Dew Point", 45: "O2 Entrance"
+# ชื่อจุดวัดสำหรับ 20 ช่องสัญญาณหลัก (CH001 - CH020)
+ch_names = {
+    1: "Z#1 Top",     2: "Z#2 Top",     3: "Z#3 Top",     4: "Z#4 Top",
+    5: "Z#5 Top",     6: "Z#6 Top",     7: "Z#7 Top",
+    8: "Z#1 Bottom",  9: "Z#2 Bottom",  10: "Z#3 Bottom", 11: "Z#4 Bottom",
+    12: "Z#5 Bottom", 13: "Z#6 Bottom", 14: "Z#7 Bottom",
+    15: "O2 Exit",    16: "Dryer #1",   17: "Dryer #2",
+    18: "N2 Flow",    19: "O2 Entrance", 20: "Dew Point"
 }
 
 def extract_start_time_from_filename(filename):
@@ -53,7 +54,7 @@ uploaded_files = st.file_uploader("อัปโหลดไฟล์ .DAD ที
 if uploaded_files and "converted_df" not in st.session_state:
     all_dfs = []
     
-    with st.spinner("กำลังสกัดข้อมูล... (ไม่ผ่านการฟิลเตอร์ใดๆ)"):
+    with st.spinner("กำลังแปลงไฟล์ตามโครงสร้าง DX2000..."):
         for file in uploaded_files:
             try:
                 start_dt = extract_start_time_from_filename(file.name)
@@ -65,34 +66,29 @@ if uploaded_files and "converted_df" not in st.session_state:
                 if points_per_channel == 0: continue
 
                 usable_points = points_per_channel * TOTAL_CHANNELS
-                
-                # 💡 อ่านแบบเรียงบรรทัด (order='C') ถูกต้องที่สุดสำหรับโครงสร้างนี้
                 reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, TOTAL_CHANNELS), order='C')
                 reshaped_data = reshaped_data / SCALE_DIVIDER
 
                 data_dict = {}
-                num_logical_channels = TOTAL_CHANNELS // 2  # 45 ช่องหลัก
                 
-                for i in range(num_logical_channels):
-                    ch_num = i + 1
+                # แมปข้อมูล 20 ช่องสัญญาณ (CH001 ถึง CH020) แยกคอลัมน์ MIN / MAX
+                for ch_num in range(1, 21):
                     ch_str = str(ch_num).zfill(3)
+                    tag_name = ch_names.get(ch_num, f"CH{ch_str}")
                     
-                    # ตั้งชื่อคอลัมน์ ถ้ามีชื่ออยู่ใน Mapping ก็จะระบุให้ด้วย
-                    if ch_num in logical_ch_names:
-                        tag_name = logical_ch_names[ch_num]
-                        col_min = f"CH{ch_str} [{tag_name}]_MIN"
-                        col_max = f"CH{ch_str} [{tag_name}]_MAX"
-                    else:
-                        col_min = f"CH{ch_str}_MIN"
-                        col_max = f"CH{ch_str}_MAX"
+                    min_col_idx = (ch_num - 1) * 2      # Index MIN
+                    max_col_idx = (ch_num - 1) * 2 + 1  # Index MAX
                     
-                    # Index เลขคู่คือ MIN, เลขคี่คือ MAX
-                    data_dict[col_min] = reshaped_data[:, i * 2]
-                    data_dict[col_max] = reshaped_data[:, i * 2 + 1]
+                    data_dict[f"CH{ch_str} [{tag_name}]_MIN"] = reshaped_data[:, min_col_idx]
+                    data_dict[f"CH{ch_str} [{tag_name}]_MAX"] = reshaped_data[:, max_col_idx]
 
                 df_single = pd.DataFrame(data_dict)
                 
+                # สร้างคอลัมน์ วัน เวลา และ sec ตามรูปแบบ DAQSTANDARD
                 time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq="10s")
+                df_single.insert(0, "sec", 0.0)
+                df_single.insert(0, "Time", time_axis.strftime('%H:%M:%S'))
+                df_single.insert(0, "Date", time_axis.strftime('%Y/%m/%d'))
                 df_single.insert(0, "Datetime", time_axis.strftime('%Y-%m-%d %H:%M:%S'))
                 
                 all_dfs.append(df_single)
@@ -111,19 +107,18 @@ if uploaded_files and "converted_df" not in st.session_state:
 if "converted_df" in st.session_state:
     df_ready = st.session_state["converted_df"]
     
-    st.success("✅ ประมวลผลเสร็จสมบูรณ์! โครงสร้างตรงกับโปรแกรมของเครื่อง 100%")
+    st.success("✅ แปลงไฟล์สำเร็จ! ข้อมูลตรงตามตาราง DAQSTANDARD 100%")
     
     st.divider()
-    st.subheader("📊 พรีวิวตารางข้อมูลดิบ (อ้างอิง CH001 คือ Z#1 Top)")
-    # แสดงตัวอย่างเฉพาะ 15 คอลัมน์แรกเพื่อความรวดเร็วในการแสดงผลบนเว็บ
-    st.dataframe(df_ready.iloc[:, :15].head(100), use_container_width=True)
+    st.subheader("📊 พรีวิวตารางข้อมูล")
+    st.dataframe(df_ready.head(100), use_container_width=True)
 
     csv_data = df_ready.to_csv(index=False).encode('utf-8-sig')
     
     st.download_button(
-        label="📥 ดาวน์โหลดไฟล์ CSV (ตารางเต็ม 90 คอลัมน์)",
+        label="📥 ดาวน์โหลดไฟล์ CSV",
         data=csv_data,
-        file_name=f"DAD_Exact_Match_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        file_name=f"DAQSTANDARD_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         type="primary",
         use_container_width=True
