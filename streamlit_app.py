@@ -1,123 +1,157 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import re
-from datetime import datetime
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+def render_interactive_charts(df: pd.DataFrame):
+    """
+    ฟังก์ชันสำหรับสร้างและแสดงผล Interactive Graphs แยกตาม Zone
+    รองรับทั้งคอลัมน์แบบมาตรฐาน (CH001_MAX) และแบบมี Tag (CH001 [Z#1 Top]_MAX)
+    """
+    # 1. จัดสรรแกน เวลา (Datetime)
+    if "Datetime" not in df.columns:
+        if "Date" in df.columns and "Time" in df.columns:
+            df["Datetime"] = pd.to_datetime(df["Date"].astype(str) + " " + df["Time"].astype(str))
+        else:
+            df["Datetime"] = df.index
+
+    # ชุดสีมาตรฐาน 7 เฉดสีสำหรับ 7 โซน
+    colors = ["#8e44ad", "#2980b9", "#27ae60", "#d35400", "#f39c12", "#c0392b", "#16a085"]
+
+    # ฟังก์ชันช่วยค้นหาชื่อคอลัมน์ใน DataFrame
+    def find_column(keywords):
+        for col in df.columns:
+            if all(kw in col for kw in keywords):
+                return col
+        return None
+
+    # ==========================================
+    # Graph 1: Top Zones (CH001 - CH007 MAX)
+    # ==========================================
+    fig_top = go.Figure()
+    for i in range(1, 8):
+        ch_str = f"CH{str(i).zfill(3)}"
+        col_name = find_column([ch_str, "MAX"]) or find_column([f"Z#{i} Top"])
+        if col_name:
+            fig_top.add_trace(go.Scatter(
+                x=df["Datetime"], 
+                y=df[col_name], 
+                name=f"Z#{i} Top",
+                mode="lines", 
+                line=dict(width=1.8, color=colors[(i-1) % len(colors)]),
+                hovertemplate=f"Z#{i} Top: %{{y:.1f}} °C<extra></extra>"
+            ))
+
+    fig_top.update_layout(
+        title="📐 Top Zones Temperature Profile (Z#1 - Z#7)",
+        xaxis_title="Date & Time",
+        yaxis_title="Temperature [°C]",
+        template="plotly_white",
+        height=400,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.12, x=1, xanchor="right")
+    )
+    st.plotly_chart(fig_top, use_container_width=True)
+
+    # ==========================================
+    # Graph 2: Bottom Zones (CH008 - CH014 MAX)
+    # ==========================================
+    fig_bot = go.Figure()
+    for i in range(8, 15):
+        zone_num = i - 7
+        ch_str = f"CH{str(i).zfill(3)}"
+        col_name = find_column([ch_str, "MAX"]) or find_column([f"Z#{zone_num} Bottom"])
+        if col_name:
+            fig_bot.add_trace(go.Scatter(
+                x=df["Datetime"], 
+                y=df[col_name], 
+                name=f"Z#{zone_num} Bottom",
+                mode="lines", 
+                line=dict(width=1.8, color=colors[(zone_num-1) % len(colors)]),
+                hovertemplate=f"Z#{zone_num} Bottom: %{{y:.1f}} °C<extra></extra>"
+            ))
+
+    fig_bot.update_layout(
+        title="📐 Bottom Zones Temperature Profile (Z#1 - Z#7)",
+        xaxis_title="Date & Time",
+        yaxis_title="Temperature [°C]",
+        template="plotly_white",
+        height=400,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.12, x=1, xanchor="right")
+    )
+    st.plotly_chart(fig_bot, use_container_width=True)
+
+    # ==========================================
+    # Graph 3 & 4: Dryers & Dew Point (Side-by-Side)
+    # ==========================================
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        fig_dryer = go.Figure()
+        d1_col = find_column(["CH016", "MAX"]) or find_column(["Dryer #1"])
+        d2_col = find_column(["CH017", "MAX"]) or find_column(["Dryer #2"])
+        
+        if d1_col:
+            fig_dryer.add_trace(go.Scatter(x=df["Datetime"], y=df[d1_col], name="Dryer #1", line=dict(color="#2ecc71", width=2)))
+        if d2_col:
+            fig_dryer.add_trace(go.Scatter(x=df["Datetime"], y=df[d2_col], name="Dryer #2", line=dict(color="#e67e22", width=2)))
+
+        fig_dryer.update_layout(
+            title="🔥 Dryer Temperatures",
+            xaxis_title="Date & Time",
+            yaxis_title="Temperature [°C]",
+            template="plotly_white",
+            height=380,
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_dryer, use_container_width=True)
+
+    with col_right:
+        fig_dew = go.Figure()
+        dew_col = find_column(["CH020", "MAX"]) or find_column(["Dew Point"])
+        if dew_col:
+            fig_dew.add_trace(go.Scatter(x=df["Datetime"], y=df[dew_col], name="Dew Point", line=dict(color="#9b59b6", width=2)))
+
+        fig_dew.update_layout(
+            title="💧 Dew Point Profile",
+            xaxis_title="Date & Time",
+            yaxis_title="Dew Point [°Cdp]",
+            template="plotly_white",
+            height=380,
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_dew, use_container_width=True)
+
+    # ==========================================
+    # Graph 5: Gas & Atmosphere Control (Dual Y-Axis)
+    # ==========================================
+    fig_gas = make_subplots(specs=[[{"secondary_y": True}]])
+    o2_exit_col = find_column(["CH015", "MAX"]) or find_column(["O2 Exit"])
+    o2_ent_col = find_column(["CH019", "MAX"]) or find_column(["O2 Entrance"])
+    n2_col = find_column(["CH018", "MAX"]) or find_column(["N2 Flow"])
+
+    if o2_exit_col:
+        fig_gas.add_trace(go.Scatter(x=df["Datetime"], y=df[o2_exit_col], name="O2 Exit", line=dict(color="#e74c3c", width=2)), secondary_y=False)
+    if o2_ent_col:
+        fig_gas.add_trace(go.Scatter(x=df["Datetime"], y=df[o2_ent_col], name="O2 Entrance", line=dict(color="#3498db", width=2)), secondary_y=False)
+    if n2_col:
+        fig_gas.add_trace(go.Scatter(x=df["Datetime"], y=df[n2_col], name="N2 Flow Rate", line=dict(color="#2ecc71", width=1.5, dash="dash")), secondary_y=True)
+
+    fig_gas.update_layout(
+        title="🧪 Atmosphere & Gas Control",
+        xaxis_title="Date & Time",
+        template="plotly_white",
+        height=400,
+        hovermode="x unified"
+    )
+    fig_gas.update_yaxes(title_text="O2 Level [ppm]", secondary_y=False)
+    fig_gas.update_yaxes(title_text="N2 Flow Rate", secondary_y=True, showgrid=False)
+    st.plotly_chart(fig_gas, use_container_width=True)
+
 
 # ==========================================
-# 1. ตั้งค่าหน้าจอ
+# เรียกใช้งานฟังก์ชัน (ตัวอย่างการต่อเข้ากับ Streamlit)
 # ==========================================
-st.set_page_config(layout="wide", page_title="Yokogawa .DAD Binary Tuner")
-st.title("🛠️ เครื่องมือปรับจูนและสกัดข้อมูลไฟล์ .DAD")
-st.markdown("""
-**วิธีใช้งาน:**
-1. อัปโหลดไฟล์ .DAD
-2. สังเกตตารางด้านล่าง หากข้อมูล **"ไหลเฉียงข้ามคอลัมน์"** ให้ลองปรับค่า **ความกว้างบรรทัด** ด้านซ้ายมือ (ลอง 44, 46, 48 หรือ 90, 92)
-3. ปรับจนกว่าค่าอุณหภูมิ (เช่น 580-600°C) จะเรียงตรงดิ่งอยู่ในคอลัมน์เดียวกัน
-4. หากตัวเลขเรียงตรงแล้ว แต่ค่าดูแปลกๆ ให้ลองขยับ **Header Offset** (ทีละ 2)
-5. เมื่อข้อมูลตรงเป๊ะแล้ว กดปุ่มดาวน์โหลด CSV ได้เลย!
-""")
-
-def clear_data_state():
-    if "converted_df" in st.session_state:
-        del st.session_state["converted_df"]
-
-# ==========================================
-# 2. แถบตั้งค่าด้านข้าง (Tuner Tools)
-# ==========================================
-st.sidebar.header("⚙️ ปรับจูนโครงสร้างไฟล์")
-st.sidebar.markdown("ปรับค่าด้านล่าง ตารางจะอัปเดตให้ดูทันที!")
-
-header_offset = st.sidebar.number_input("1. Header Offset (เริ่มอ่านที่ไบต์)", min_value=0, max_value=8192, value=512, step=2)
-total_channels = st.sidebar.number_input("2. ความกว้างบรรทัด (Total Channels)", min_value=10, max_value=200, value=46, step=1)
-skip_channels = st.sidebar.number_input("3. ตัดข้อมูลส่วนหัวบรรทัดทิ้ง (Skip Ch.)", min_value=0, max_value=20, value=0, step=1)
-scale_divider = st.sidebar.number_input("4. ตัวหารทศนิยม (Scale)", min_value=1.0, max_value=100.0, value=10.0, step=1.0)
-
-# ==========================================
-# 3. ฟังก์ชันดึงเวลา
-# ==========================================
-def extract_start_time_from_filename(filename):
-    matches = re.findall(r'\d{6}', filename)
-    if len(matches) >= 2:
-        d_str, t_str = matches[-2], matches[-1]
-        p1, p2, p3 = int(d_str[:2]), int(d_str[2:4]), int(d_str[4:6])
-        hh, mm, ss = int(t_str[:2]), int(t_str[2:4]), int(t_str[4:6])
-        if 20 <= p1 <= 35: year, month, day = 2000 + p1, p2, p3
-        elif 20 <= p3 <= 35: day, month, year = p1, p2, 2000 + p3
-        else: year, month, day = 2000 + p1, p2, p3
-        try: return datetime(year, month, day, hh, mm, ss)
-        except ValueError: pass
-    return pd.to_datetime("today").replace(microsecond=0)
-
-# ==========================================
-# 4. อัปโหลดและประมวลผล
-# ==========================================
-uploaded_files = st.file_uploader("อัปโหลดไฟล์ .DAD ที่นี่", type=["dad", "DAD"], accept_multiple_files=True)
-
-if uploaded_files:
-    all_dfs = []
-    
-    with st.spinner("กำลังประมวลผลและสร้างตาราง..."):
-        for file in uploaded_files:
-            try:
-                start_dt = extract_start_time_from_filename(file.name)
-                
-                binary_data = file.read()
-                
-                # ตรวจสอบขนาดไฟล์ก่อนอ่าน
-                if len(binary_data) <= header_offset:
-                    st.warning(f"ไฟล์ {file.name} มีขนาดเล็กกว่า Header Offset ที่ตั้งไว้")
-                    continue
-                    
-                raw_signals = np.frombuffer(binary_data, dtype=np.dtype(">i2"), offset=header_offset).astype(float)
-                
-                points_per_channel = len(raw_signals) // total_channels
-                if points_per_channel == 0: continue
-
-                usable_points = points_per_channel * total_channels
-                
-                # อ่านแบบเรียงบรรทัด (order='C')
-                reshaped_data = raw_signals[:usable_points].reshape((points_per_channel, total_channels), order='C')
-                reshaped_data = reshaped_data / scale_divider
-
-                # สร้างชื่อคอลัมน์
-                col_names = [f"CH_{str(i+1).zfill(3)}" for i in range(total_channels - skip_channels)]
-                
-                # ตัดคอลัมน์ที่ไม่ต้องการออกจากด้านหน้า (ถ้ามีการตั้งค่า Skip)
-                data_to_df = reshaped_data[:, skip_channels:]
-                
-                df_single = pd.DataFrame(data_to_df, columns=col_names)
-                
-                # สร้างคอลัมน์ วัน เวลา และ sec 
-                time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq="10s")
-                df_single.insert(0, "sec", 0.0)
-                df_single.insert(0, "Time", time_axis.strftime('%H:%M:%S'))
-                df_single.insert(0, "Date", time_axis.strftime('%Y/%m/%d'))
-                df_single.insert(0, "Datetime", time_axis.strftime('%Y-%m-%d %H:%M:%S'))
-                
-                all_dfs.append(df_single)
-                
-            except Exception as e:
-                st.error(f"❌ เกิดข้อผิดพลาดในการอ่านไฟล์ {file.name}: {e}")
-
-        if all_dfs:
-            full_df = pd.concat(all_dfs, ignore_index=True)
-            full_df = full_df.drop_duplicates(subset=["Datetime"]).reset_index(drop=True)
-            
-            st.success("✅ แปลงไฟล์สำเร็จ! ลองเลื่อนดูตารางด้านล่างว่าคอลัมน์ตรงหรือยังครับ")
-            
-            st.divider()
-            st.subheader("📊 พรีวิวตารางข้อมูลดิบ (Tuner Preview)")
-            # แสดงข้อมูลเพื่อเช็คความตรงของคอลัมน์
-            st.dataframe(full_df.head(100), use_container_width=True)
-
-            csv_data = full_df.to_csv(index=False).encode('utf-8-sig')
-            
-            st.download_button(
-                label="📥 ดาวน์โหลดไฟล์ CSV ที่ปรับจูนแล้ว",
-                data=csv_data,
-                file_name=f"DAD_Tuned_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                type="primary",
-                use_container_width=True
-            )
+if "converted_df" in st.session_state:
+    render_interactive_charts(st.session_state["converted_df"])
