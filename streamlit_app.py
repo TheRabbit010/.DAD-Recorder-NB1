@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ==========================================
 # 1. ตั้งค่าหน้าจอ
@@ -17,9 +17,9 @@ st.title("📊 DAD Time-Series Visualizer")
 # 🔄 ฟังก์ชันเคลียร์ข้อมูลเก่าอัตโนมัติ
 # ==========================================
 def clear_old_data():
-    """ล้างข้อมูลและ cache เก่าใน session_state ทั้งหมดเมื่อมีการเปลี่ยนไฟล์"""
+    """ล้างข้อมูลและ cache เก่าใน session_state ทั้งหมดเมื่อมีการเลือกหรือเปลี่ยนไฟล์ใหม่"""
     for key in list(st.session_state.keys()):
-        if key != "dad_file_uploader":  # เว้น key ของ file uploader ไว้
+        if key != "dad_file_uploader":
             del st.session_state[key]
 
 # ==========================================
@@ -30,12 +30,9 @@ show_max = st.sidebar.checkbox("🔴 แสดงค่าสูงสุด (Sh
 show_min = st.sidebar.checkbox("🔵 แสดงค่าต่ำสุด (Show Min)", value=False)
 
 st.sidebar.divider()
-st.sidebar.header("⏱️ การตั้งค่าเวลา (Time Settings)")
-sample_rate_sec = st.sidebar.number_input("ความถี่ในการบันทึก (วินาที/Record)", min_value=0.1, value=1.0, step=0.1, 
-                                          help="ระบุความเร็วในการดึงข้อมูลของเครื่อง (เช่น 1 วินาที)")
+st.sidebar.success("⏱️ **ระบบเวลา:** ดึงวันเวลาเริ่มต้นจากไฟล์ที่เลือก และเพิ่มขึ้น **บรรทัดละ 10 วินาที (+10s)** อัตโนมัติ")
 
 st.sidebar.divider()
-# ปุ่มสำหรับกดล้างข้อมูลเองด้วยตนเอง (Manual Reset)
 if st.sidebar.button("🗑️ ล้างข้อมูลทั้งหมด (Clear Data)", use_container_width=True, type="secondary"):
     clear_old_data()
     st.rerun()
@@ -75,15 +72,17 @@ COLOR_PALETTE = [
 ]
 
 def extract_start_time_from_filename(filename):
+    """ ดึงวันและเวลาเริ่มต้นจริงจากชื่อไฟล์ """
+    # ค้นหากลุ่มตัวเลข 6 หลัก (เช่น YYMMDD และ HHMMSS)
     matches = re.findall(r'\d{6}', filename)
     if len(matches) >= 2:
         d_str, t_str = matches[-2], matches[-1]
         p1, p2, p3 = int(d_str[:2]), int(d_str[2:4]), int(d_str[4:6])
         hh, mm, ss = int(t_str[:2]), int(t_str[2:4]), int(t_str[4:6])
             
-        if 20 <= p1 <= 30:  
+        if 20 <= p1 <= 35:  
             year, month, day = 2000 + p1, p2, p3
-        elif 20 <= p3 <= 30: 
+        elif 20 <= p3 <= 35: 
             day, month, year = p1, p2, 2000 + p3
         else:
             year, month, day = 2000 + p1, p2, p3
@@ -93,32 +92,33 @@ def extract_start_time_from_filename(filename):
         except ValueError:
             pass
             
-    return pd.to_datetime("today").replace(hour=8, minute=0, second=0, microsecond=0), False
+    # กรณีดึงจากชื่อไฟล์ไม่ได้ ให้ใช้วันเวลาปัจจุบันเป็นค่าตั้งต้น
+    return pd.to_datetime("today").replace(microsecond=0), False
 
 # ==========================================
-# 4. การจัดการและรวมไฟล์ (เปิดใช้งาน Auto-Clear)
+# 4. การจัดการและรวมไฟล์
 # ==========================================
 uploaded_files = st.file_uploader(
     "เลือกไฟล์ .DAD", 
     type=["dad", "DAD"], 
     accept_multiple_files=True,
     key="dad_file_uploader",
-    on_change=clear_old_data  # 👈 เรียกใช้ฟังก์ชันล้างข้อมูลทันทีเมื่อเปลี่ยนไฟล์
+    on_change=clear_old_data
 )
 
 if uploaded_files:
-    # เรียงลำดับไฟล์ตาม Datetime จริง
+    # 1. ถอดเวลาเริ่มต้นจริงของแต่ละไฟล์ แล้วนำมาเรียงลำดับไฟล์ตามเวลาจริง
     parsed_files = []
     for f in uploaded_files:
-        dt, is_valid = extract_start_time_from_filename(f.name)
-        parsed_files.append((f, dt if is_valid else datetime.max))
+        start_dt, is_valid = extract_start_time_from_filename(f.name)
+        parsed_files.append((f, start_dt, is_valid))
     
+    # เรียงลำดับไฟล์ตามเวลาเริ่มต้นจริง
     parsed_files.sort(key=lambda x: x[1])
-    sorted_files = [item[0] for item in parsed_files]
 
     all_dfs = []
     
-    for i, file in enumerate(sorted_files):
+    for file, start_dt, is_valid in parsed_files:
         try:
             binary_data = file.read()
             raw_signals = np.frombuffer(binary_data, dtype=np.dtype(DTYPE_STR), offset=HEADER_OFFSET).astype(float)
@@ -138,7 +138,7 @@ if uploaded_files:
                 ch_name = ch_info[ch_num]
                 val_array = reshaped_data[:, col_idx]
                 
-                # กรองค่าขยะ 0.0 ของกลุ่มอุณหภูมิออก
+                # กรองค่าขยะ 0.0 ของกลุ่มอุณหภูมิออก ป้องกันกราฟดิ่งลงล่าง
                 if "Top" in ch_name or "Bottom" in ch_name or "Dryer" in ch_name:
                     val_array = np.where((val_array <= 0.0) | (val_array > 3500.0), np.nan, val_array)
                 else:
@@ -148,12 +148,11 @@ if uploaded_files:
 
             df_single = pd.DataFrame(data_dict)
 
-            start_dt, _ = extract_start_time_from_filename(file.name)
-            time_freq = f"{int(sample_rate_sec * 1000)}ms"
-            time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq=time_freq)
-            
+            # 🎯 กำหนดเวลาเริ่มต้นจริงจากไฟล์ แล้วบวกเพิ่มทีละ 10 วินาทีตามจำนวนบรรทัด (10s step)
+            time_axis = pd.date_range(start=start_dt, periods=points_per_channel, freq="10s")
             df_single.insert(0, "Datetime", time_axis)
             
+            # Interpolate เติมช่องว่างข้อมูลที่ถูกกรองออก
             for col in df_single.columns[1:]:
                 df_single[col] = df_single[col].interpolate(method='linear', limit_direction='both')
                 
@@ -170,7 +169,7 @@ if uploaded_files:
         full_df = full_df.sort_values(by="Datetime").reset_index(drop=True)
         full_df = full_df.drop_duplicates(subset=["Datetime"], keep="first").reset_index(drop=True)
 
-        num_files_str = f"({len(sorted_files)} Files)"
+        num_files_str = f"({len(parsed_files)} Files)"
 
         # 📥 Export Section
         st.sidebar.divider()
@@ -184,7 +183,7 @@ if uploaded_files:
             use_container_width=True
         )
 
-        with st.expander("🔍 ดูตารางข้อมูลดิบ"):
+        with st.expander("🔍 ดูตารางข้อมูลดิบ (เวลาเริ่มต้นจริง + เพิ่มบรรทัดละ 10 วินาที)"):
             st.dataframe(full_df.head(100), use_container_width=True)
 
         def apply_white_theme_style(fig, y_title, y_range=None, is_secondary=False):
