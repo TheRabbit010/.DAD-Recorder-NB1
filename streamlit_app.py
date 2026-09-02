@@ -20,8 +20,8 @@ import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Factory Process Dashboard - Complete 4-Subplots Dashboard")
-st.subheader("แสดงผลครบทั้ง 23 ช่องสัญญาณ: Dryer, Heating Zone 1-14, O2, N2 Flow และ Dew Point")
+st.title("🏭 Factory Process Dashboard - High-Density Complete Subplots")
+st.subheader("ระบบพล็อตกราฟแยกพารามิเตอร์ 4 ชั้น พร้อมปรับสเกลเวลาจริง")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -36,7 +36,7 @@ if uploaded_file is not None:
     # กรองล้างค่าขยะภายนอกช่วงเครื่องมือวัดอุตสาหกรรม
     clean_stream = [n for n in numeric_stream if -200.0 < n < 6000.0]
     
-    # [แก้ไขจุดสำคัญ] ล็อกจำนวนช่องสัญญาณให้ตรงกับ 23 คอลัมน์ของสถานีวัด Yokogawa จริง
+    # ล็อกจำนวนช่องสัญญาณให้ตรงกับ 23 คอลัมน์ของสถานีวัด Yokogawa จริง
     detected_channels = 23
     
     if len(clean_stream) >= detected_channels:
@@ -47,7 +47,23 @@ if uploaded_file is not None:
         # จัดพารามิเตอร์ลงตาราง DataFrame ตามโครงสร้างสถานีควบคุม
         col_names = [f'CH_{i+1}' for i in range(detected_channels)]
         df = pd.DataFrame(matrix_data, columns=col_names)
-        df['DateTime'] = pd.date_range(start='2026-09-02 00:00:00', periods=len(df), freq='1s')
+        
+        # ----------------------------------------------------
+        # [เพิ่มระบบตั้งค่าเวลาดิฟ] ให้ผู้ใช้เลือกปรับความถี่ของการบันทึกข้อมูลได้เองผ่านหน้าเว็บ
+        # ----------------------------------------------------
+        st.sidebar.header("⏱️ ตั้งค่าเวลาบันทึก (Time Settings)")
+        start_date = st.sidebar.date_input("เลือกวันที่เริ่มต้นขบวนการผลิต", value=pd.to_datetime('2026-09-02'))
+        start_time = st.sidebar.time_input("เลือกเวลาที่เริ่มบันทึก", value=pd.to_datetime('2026-09-02 00:00:00').time())
+        
+        # ตั้งค่าจังหวะเวลา (Sampling Interval) เช่น ทุกๆ 10 วินาที, 1 นาที
+        time_unit = st.sidebar.selectbox("ช่วงระยะเวลาห่างต่อจุดข้อมูล (Interval)", ["วินาที (Seconds)", "นาที (Minutes)"], index=0)
+        time_value = st.sidebar.number_input("จำนวนหน่วยเวลาต่อ 1 จุด", min_value=1, value=10) # ค่าเริ่มต้นปรับเป็นทุก 10 วินาทีเพื่อขยายแกน X ให้กว้างขึ้น
+        
+        # คำนวณความถี่แกน X ตามที่ผู้ใช้กำหนด
+        freq_code = f"{time_value}s" if time_unit == "วินาที (Seconds)" else f"{time_value}min"
+        start_timestamp = pd.to_datetime(f"{start_date} {start_time}")
+        
+        df['DateTime'] = pd.date_range(start=start_timestamp, periods=len(df), freq=freq_code)
         
         st.success(f"🔓 ถอดรหัสคลื่นสัญญาณสำเร็จ! แสดงผลครบทั้ง {detected_channels} ช่องสัญญาณ (ความละเอียด {len(df)} แถวข้อมูล)")
 
@@ -128,7 +144,7 @@ if uploaded_file is not None:
         fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#3357FF", row=3, col=1, secondary_y=True)
         
         fig.update_yaxes(title_text="Dew Point (Auto)", row=4, col=1)
-        fig.update_xaxes(title_text="Timeline Index", row=4, col=1)
+        fig.update_xaxes(title_text="Date & Time (Process Timeline)", row=4, col=1)
 
         # พล็อตกราฟขึ้นแสดงบนหน้าเว็บ Streamlit
         st.plotly_chart(fig, use_container_width=True)
