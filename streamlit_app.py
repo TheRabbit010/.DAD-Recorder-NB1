@@ -20,8 +20,8 @@ import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Factory Process Master Dashboard - Perfect Separation Mode")
-st.subheader("แยกกราฟ Heating Top/Bottom ออกจากกัน และแยกกลุ่ม Legend Box ทุกพารามิเตอร์อิสระ")
+st.title("🏭 Factory Process Master Dashboard - Calibration Mode")
+st.subheader("จัดสเกลช่วงอุณหภูมิ/ความชื้นตรงหน้างานจริง และรวมกลุ่ม Legend ไว้ขวาสุด")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -54,7 +54,7 @@ if uploaded_file is not None:
         start_timestamp = pd.to_datetime(f"{start_date} {start_time}")
         df['DateTime'] = pd.date_range(start=start_timestamp, periods=len(df), freq=freq_code)
         
-        st.success(f"🔓 ถอดรหัสไฟล์และแยกสเกลอุตสาหกรรมสำเร็จ พร้อมกระจายโครงสร้าง 5 บล็อกกราฟ")
+        st.success(f"🔓 ถอดรหัสคลื่นสัญญาณสำเร็จ! ทำการประมวลผลแมปปิ้งสเกลอุตสาหกรรม")
 
         # ฟังก์ชันคำนวณปรับสเกลตัวเลข (Min-Max Rescaling)
         def scale_data(series, target_min, target_max):
@@ -63,7 +63,7 @@ if uploaded_file is not None:
                 return series + target_min
             return target_min + ((series - s_min) * (target_max - target_min) / (s_max - s_min))
 
-        # 2. เริ่มสร้างโครงสร้าง Subplots แบบ 5 ชั้นแนวตั้ง ( shared_xaxes=True ลิงก์เวลาหากันหมด)
+        # 2. เริ่มสร้างโครงสร้าง Subplots แบบ 5 ชั้นแนวตั้ง
         fig = make_subplots(
             rows=5, 
             cols=1, 
@@ -77,36 +77,36 @@ if uploaded_file is not None:
         )
 
         # ----------------------------------------------------
-        # กล่องที่ 1: Dryer #1 & Dryer #2 (สเกล 200 - 400 °C)
+        # กล่องที่ 1: Dryer #1 & Dryer #2 (ปรับสเกลใหม่ตามจริง: 0 - 400 °C)
         # ----------------------------------------------------
         if 'CH_1' in df.columns:
-            y1 = scale_data(df['CH_1'], 200.0, 400.0)
+            y1 = scale_data(df['CH_1'], 0.0, 400.0)
             fig.add_trace(go.Scatter(x=df['DateTime'], y=y1, name="Dryer #1", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
         if 'CH_2' in df.columns:
-            y2 = scale_data(df['CH_2'], 200.0, 400.0)
+            y2 = scale_data(df['CH_2'], 0.0, 400.0)
             fig.add_trace(go.Scatter(x=df['DateTime'], y=y2, name="Dryer #2", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 2: Heating Zone 1-7 (Top เท่านั้น - สเกล 580 - 650 °C)
+        # กล่องที่ 2: Heating Zone 1-7 (Top - ปรับสเกลใหม่ตามจริง: 400 - 650 °C)
         # ----------------------------------------------------
         heat_start_idx = 5
         for i in range(0, 7):
             ch_name = f'CH_{heat_start_idx + i}'
             if ch_name in df.columns:
-                y_heat = scale_data(df[ch_name], 580.0, 650.0)
+                y_heat = scale_data(df[ch_name], 400.0, 650.0)
                 fig.add_trace(go.Scatter(x=df['DateTime'], y=y_heat, name=f"H-Zone {i+1} (Top)", legend="legend2", line=dict(width=1.5)), row=2, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 3: Heating Zone 8-14 (Bottom เท่านั้น - สเกล 580 - 650 °C)
+        # กล่องที่ 3: Heating Zone 8-14 (Bottom - ปรับสเกลใหม่ตามจริง: 400 - 650 °C)
         # ----------------------------------------------------
         for i in range(7, 14):
             ch_name = f'CH_{heat_start_idx + i}'
             if ch_name in df.columns:
-                y_heat = scale_data(df[ch_name], 580.0, 650.0)
+                y_heat = scale_data(df[ch_name], 400.0, 650.0)
                 fig.add_trace(go.Scatter(x=df['DateTime'], y=y_heat, name=f"H-Zone {i+1} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 4: Oxygen (แกนซ้าย) & N2 Flow (แกนขวา) พร้อมแยกกล่องคำอธิบายคนละฝั่ง
+        # กล่องที่ 4: Oxygen (แกนซ้ายสเกล 0-200) & N2 Flow (แกนขวา) [รวมกลุ่มคำอธิบายไว้ฝั่งเดียวกันด้านขวา]
         # ----------------------------------------------------
         if 'CH_3' in df.columns:
             y_o2 = scale_data(df['CH_3'], 0.0, 200.0)
@@ -117,49 +117,48 @@ if uploaded_file is not None:
 
         if 'CH_4' in df.columns:
             fig.add_trace(go.Scatter(
-                x=df['DateTime'], y=df['CH_4'], name="N2 Flow (h3/h)", legend="legend5", 
+                x=df['DateTime'], y=df['CH_4'], name="N2 Flow (h3/h)", legend="legend4", # [รวมกลุ่ม] ใช้คีย์ legend4 เหมือนกันเพื่อให้อยู่ในบล็อกขวาด้วยกัน
                 line=dict(color='#3357FF', width=2)
             ), row=4, col=1, secondary_y=True)
 
         # ----------------------------------------------------
-        # กล่องที่ 5: Dew Point (สเกล 10 ถึง -100 °C)
+        # กล่องที่ 5: Dew Point (สเกลตามจริง 10 ถึง -100 °Cdp - โหมด Free Scale)
         # ----------------------------------------------------
         if 'CH_23' in df.columns:
             y_dew = scale_data(df['CH_23'], -100.0, 10.0)
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=y_dew, name="Dew Point", legend="legend6", line=dict(color='#E333FF', width=2, dash='dot')), row=5, col=1)
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=y_dew, name="Dew Point", legend="legend5", line=dict(color='#E333FF', width=2, dash='dot')), row=5, col=1)
 
-        # 3. จัดสรรผังตารางคำอธิบาย (Legends Layout) กระจายแยกบล็อกเป็นสัดส่วน ไม่ซ้อนกัน
+        # 3. จัดสรรตำแหน่งกล่องคำอธิบาย (Legends Layout) ย้ายกลับมารวมฝั่งขวาทั้งหมดเรียงตามชั้น
         fig.update_layout(
             template="plotly_dark",
             height=1100, 
             hovermode="x unified",
-            title_text="Yokogawa Process Analyzer Dashboard (Advanced Separation Mode)",
+            title_text="Yokogawa Process Analyzer Dashboard (Calibrated Bounds Mode)",
             
-            # บล็อกคำอธิบายฝั่งขวาของหน้าจอ (จัดพิกัดแยกตามระดับความสูงของแต่ละกล่อง)
+            # บล็อกคำอธิบายฝั่งขวาของหน้าจอทั้งหมด (ย้ายป้าย N2 Flow กลับมาอยู่รวมกับ Oxygen ในชั้นที่ 4)
             legend1=dict(traceorder="normal", x=1.02, y=0.94, bgcolor="rgba(0,0,0,0)"),
             legend2=dict(traceorder="normal", x=1.02, y=0.75, bgcolor="rgba(0,0,0,0)"),
             legend3=dict(traceorder="normal", x=1.02, y=0.55, bgcolor="rgba(0,0,0,0)"),
-            legend4=dict(traceorder="normal", x=1.02, y=0.35, bgcolor="rgba(0,0,0,0)"), # ป้าย Oxygen
-            legend6=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)"), # ป้าย Dew Point
-            
-            # ย้ายกล่องคำอธิบายของ N2 Flow หลบไปอยู่ฝั่งซ้ายสุดของหน้าจอ เพื่อแก้การตีกันกับ Oxygen
-            legend5=dict(traceorder="normal", x=-0.18, y=0.35, bgcolor="rgba(0,0,0,0)")
+            legend4=dict(traceorder="normal", x=1.02, y=0.35, bgcolor="rgba(0,0,0,0)"), # รวม Oxygen & N2 Flow ไว้ที่นี่
+            legend5=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)")  # ป้าย Dew Point
         )
         
-        # [แก้ไขแล้ว] บรรจุตัวเลขช่วงขอบเขตสเกลแกน Y อย่างสมบูรณ์ ถูกต้องตาม Syntax ของ Python 100%
-        fig.update_yaxes(title_text="Dryer Temp (°C)", range=[180, 420], row=1, col=1)
-        fig.update_yaxes(title_text="Heating Top (°C)", range=[560, 670], row=2, col=1)
-        fig.update_yaxes(title_text="Heating Bottom (°C)", range=[560, 670], row=3, col=1)
+        # ล็อกช่วงสเกลแกน Y ของแต่ละสถานีวัดตามมาตรฐานที่ระบุ
+        fig.update_yaxes(title_text="Dryer Temp (°C)", range=[-10, 420], row=1, col=1)
+        fig.update_yaxes(title_text="Heating Top (°C)", range=[380, 680], row=2, col=1)
+        fig.update_yaxes(title_text="Heating Bottom (°C)", range=[380, 680], row=3, col=1)
         
-        fig.update_yaxes(title_text="Oxygen (ppm O2)", color="#33FF57", range=[-10, 220], row=4, col=1, secondary_y=False)
+        # กล่องที่ 4: ล็อกแกนซ้าย Oxygen 0-200 / แกนขวา N2 Flow เปิด Free Scale อัตโนมัติ
+        fig.update_yaxes(title_text="Oxygen (ppm O2)", color="#33FF57", range=[-10, 210], row=4, col=1, secondary_y=False)
         fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#3357FF", autorange=True, row=4, col=1, secondary_y=True)
         
-        fig.update_yaxes(title_text="Dew Point (°C)", range=[-110, 20], row=5, col=1)
+        # กล่องที่ 5: Dew Point ปรับให้เป็น Free Scale (autorange=True) เพื่อความยืดหยุ่นในการส่องดูแนวโน้ม
+        fig.update_yaxes(title_text="Dew Point (°Cdp)", autorange=True, row=5, col=1)
         fig.update_xaxes(title_text="Date & Time (Process Timeline)", row=5, col=1)
 
         st.plotly_chart(fig, use_container_width=True)
         
     else:
-        st.error("❌ โครงสร้างชุดข้อมูลในไฟล์ .DAD ไม่สอดคล้องกับพารามิเตอร์ 23 ช่องสัญญาณ")
+        st.error("❌ โครงสร้างข้อมูลในไฟล์ดิบสั้นเกินไป ไม่เพียงพอต่อการจัดวางระบบ 23 ช่องสัญญาณ")
 else:
-    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟแยกโซนท็อป-บอตทอมแบบสมบูรณ์")
+    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟสอบเทียบสเกลเวอร์ชันเสร็จสมบูรณ์")
