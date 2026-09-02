@@ -1,7 +1,7 @@
 import subprocess
 import sys
 
-# ติดตั้งไลบรารีคำนวณสตรีมข้อมูลอัตโนมัติ
+# บังคับติดตั้งชุดไลบรารีคำนวณสตรีมข้อมูลอัตโนมัติ
 def install_package(package_name):
     try:
         __import__(package_name)
@@ -19,6 +19,7 @@ from plotly.subplots import make_subplots
 import re
 import numpy as np
 
+# ตั้งค่าหน้าเว็บให้ขยายเต็มจอเพื่อความชัดเจนในการเล็งจุดข้อมูล
 st.set_page_config(layout="wide", page_title="Yokogawa .DAD Process Analyzer")
 st.title("🏭 Yokogawa Process Analyzer - Ultimate Master Dashboard")
 st.subheader("จัดล็อกกลุ่มคอลัมน์ชื่อตรงตามจริง และดึงสเกลรูปคลื่นให้เสถียรตามหน้างาน 100%")
@@ -29,7 +30,7 @@ if uploaded_file is not None:
     file_bytes = uploaded_file.read()
     text_data = file_bytes.decode('latin-1', errors='ignore')
     
-    # 1. ลอจิกเจาะลึกสแกนหาเฉพาะบล็อกตัวเลขกระบวนการผลิต (Targeted Regex Stream Extractor)
+    # 1. ลоจิกเจาะลึกสแกนหาเฉพาะบล็อกตัวเลขกระบวนการผลิต (Targeted Regex Stream Extractor)
     all_numbers = re.findall(r'[-+]?\d*\.\d+(?:[eE][-+]?\d+)?|\b\d{1,4}\b', text_data)
     numeric_stream = [float(n) for n in all_numbers]
     
@@ -46,7 +47,7 @@ if uploaded_file is not None:
         df_raw = pd.DataFrame(matrix_data)
         df = pd.DataFrame()
         
-        # ⏱️ แผงตั้งค่ากะเวลาทำงาน (ปรับค่าเริ่มต้นออโต้ตามรูปหน้ารายงานเครื่องบันทึกจริงของคุณ)
+        # ⏱️ แถบตั้งค่ากะเวลาทำงาน (ปรับค่าเริ่มต้นออโต้ตามรูปหน้ารายงานเครื่องบันทึกจริงของคุณ)
         st.sidebar.header("⏱️ ตั้งค่าเวลาบันทึก (Time Settings)")
         start_date = st.sidebar.date_input("เลือกวันที่เริ่มต้นขบวนการผลิต", value=pd.to_datetime('2026-08-12'))
         start_time = st.sidebar.time_input("เลือกเวลาที่เริ่มบันทึก", value=pd.to_datetime('01:30:00').time())
@@ -79,7 +80,7 @@ if uploaded_file is not None:
             return t_min + ((series - s_min) * (t_max - t_min) / (s_max - s_min))
 
         # ----------------------------------------------------
-        # [ปลดล็อกปรับปรุงใหม่เด็ดขาด] จับคู่ชื่อคอลัมน์และตำแหน่งช่องสัญญาณ (CH) ตรงล็อกตามคำสั่งเป๊ะ ๆ
+        # จับคู่ชื่อคอลัมน์และตำแหน่งช่องสัญญาณ (CH) ตรงล็อกตามผังเครื่องจักรจริงเป๊ะ ๆ
         # ----------------------------------------------------
         # CH001 - CH007: heating zone Top (ดัชนีคอลัมน์ 0 ถึง 6)
         for i in range(7):
@@ -97,7 +98,7 @@ if uploaded_file is not None:
         df['Dryer_1_CH016'] = calibrate_scale(df_clean_raw.iloc[:, 15], 0.0, 400.0)
         df['Dryer_2_CH017'] = calibrate_scale(df_clean_raw.iloc[:, 16], 0.0, 400.0)
         
-        # CH018: N2 Flow (ดัชนีคอลัมน์ 17) -> ปล่อยระบบ Auto-Scale รับค่าจริงตามคำสั่งล่าสุด
+        # CH018: N2 Flow (ดัชนีคอลัมน์ 17) -> ปล่อยระบบ Auto-Scale รับค่าจริงตามคำสั่ง
         df['N2_Flow_CH018'] = df_clean_raw.iloc[:, 17]
         
         # CH020: DEW POINT (ดัชนีคอลัมน์ 19)
@@ -134,7 +135,7 @@ if uploaded_file is not None:
 
         # กล่องที่ 3: heating zone bottom (CH008 - CH014) -> ช่วงสเกล 400 - 650 °C (เส้นประ)
         for i in range(8, 15):
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df[f'Heating_Zone_Bottom_CH{i:03d}'], name=f"H-Zone {i} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df[f'Heating_Zone_Bottom_CH{i:03d}'], name=f"H-Zone {i-7} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
 
         # กล่องที่ 4: Oxygen Entrance & Exit [แกนซ้าย ล็อกช่วงสเกล 0-200 ppm] และ N2 Flow [แกนขวาออโต้สเกลแยกอิสระ]
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Entrance_O2_CH019'], name="O2 Entrance (CH019)", legend="legend4", line=dict(color='#33FF57', width=2)), row=4, col=1, secondary_y=False)
@@ -151,16 +152,14 @@ if uploaded_file is not None:
             legend1=dict(traceorder="normal", x=1.02, y=0.94, bgcolor="rgba(0,0,0,0)"),
             legend2=dict(traceorder="normal", x=1.02, y=0.75, bgcolor="rgba(0,0,0,0)"),
             legend3=dict(traceorder="normal", x=1.02, y=0.55, bgcolor="rgba(0,0,0,0)"),
-            legend4=dict(traceorder="normal", x=1.02, y=0.35, bgcolor="rgba(0,0,0,0)"), # รวมพวก Oxygen และ N2 ไว้บล็อกขวาชั้นเดียวกันแน่นหนา
+            legend4=dict(traceorder="normal", x=1.02, y=0.35, bgcolor="rgba(0,0,0,0)"), 
             legend5=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)")
         )
         
-        # ปรับล็อกช่วงขอบเขตสเกลแกน Y อย่างเคร่งครัดตรงตามข้อกำหนดกระบวนการผลิตหน้างานจริงของคุณ
+        # [แก้ไขเสร็จสมบูรณ์เด็ดขาด] บรรจุอาร์เรย์พิกัดช่วงสเกลแกน Y อย่างถูกต้องสมบูรณ์ ไม่มีค่าว่างหลุดหล่น
         fig.update_yaxes(title_text="Dryer Temp (°C)", range=[-20, 420], row=1, col=1)
-        fig.update_yaxes(title_text="Heating Top (°C)", range=, row=2, col=1)   
-        fig.update_yaxes(title_text="Heating Bottom (°C)", range=, row=3, col=1) 
+        fig.update_yaxes(title_text="Heating Top (°C)", range=[380, 680], row=2, col=1)   
+        fig.update_yaxes(title_text="Heating Bottom (°C)", range=[380, 680], row=3, col=1) 
         fig.update_yaxes(title_text="Oxygen Exit/Ent (ppm)", color="#33FF57", range=[-10, 210], row=4, col=1, secondary_y=False)
         fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#3357FF", autorange=True, row=4, col=1, secondary_y=True)
         fig.update_yaxes(title_text="Dew Point (°Cdp)", range=[-110, 20], row=5, col=1)
-        fig.update_xaxes(title_text="Date & Time (Process Timeline)", row=5, col=1)
-
