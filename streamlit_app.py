@@ -19,7 +19,7 @@ import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Integrated Process Dashboard - Dynamic Layout")
+st.title("🏭 Integrated Process Dashboard - Final Stable Layout")
 st.subheader("พล็อตกราฟรวมแกนอัตโนมัติ ทนทานต่อไฟล์ดิบทุกเวอร์ชัน")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
@@ -28,14 +28,13 @@ if uploaded_file is not None:
     file_bytes = uploaded_file.read()
     text_data = file_bytes.decode('latin-1', errors='ignore')
     
-    # 1. ขูดตัวเลขทั้งหมดจากไฟล์ดิบ (ตัดเอาเฉพาะค่าที่สมเหตุสมผลของกระบวนการผลิต)
+    # 1. สกัดตัวเลขทั้งหมดจากไฟล์ดิบ (ตัดเอาเฉพาะค่าที่สมเหตุสมผลของกระบวนการผลิต)
     all_numbers = re.findall(r'[-+]?\d*\.\d+|\b\d{2,4}\b', text_data)
     numeric_stream = [float(n) for n in all_numbers]
     clean_stream = [n for n in numeric_stream if -150.0 < n < 5000.0]
     
     if len(clean_stream) > 10:
-        # ค้นหาโครงสร้างจำนวนคอลัมน์ที่มีอยู่จริงในไฟล์นี้อัตโนมัติโดยเช็กจากความยาวข้อมูล
-        # ลองสุ่มหาตัวหารจำนวนช่องสัญญาณทั่วไป (ตั้งแต่ 4 ช่อง จนถึง 30 ช่อง)
+        # บังคับหาตัวหารตามจำนวนคอลัมน์จริงเพื่อจัดโครงสร้าง
         detected_channels = 4
         for ch in range(4, 32):
             if len(clean_stream) % ch == 0:
@@ -51,10 +50,6 @@ if uploaded_file is not None:
         
         st.success(f"🔓 ถอดรหัสไฟล์สำเร็จ! ตรวจพบข้อมูลทั้งหมด {detected_channels} ช่องสัญญาณ ({len(df)} แถวข้อมูล)")
 
-        # จัดกลุ่มช่องสัญญาณตามลำดับพารามิเตอร์ที่มีอยู่จริง
-        # สมมติสัดส่วนจัดสรรตามลำดับทั่วไป: Dryer(1-2), O2(3), N2(4), Heating(5-18), DewPoint(19)
-        # หากจำนวนช่องน้อยกว่า ระบบจะขยับสัดส่วนตามข้อมูลที่มีให้อัตโนมัติ
-        
         fig = go.Figure()
 
         # ----------------------------------------------------
@@ -102,28 +97,39 @@ if uploaded_file is not None:
                 line=dict(color='#E333FF', width=2, dash='dot'), yaxis="y3"
             ))
 
-        # 3. ตกแต่ง Layout แยกระดับสเกลแกน Y
+        # 3. ตกแต่ง Layout แยกระดับสเกลแกน Y (ปรับปรุงโครงสร้างแก้ ValueError)
         fig.update_layout(
             template="plotly_dark",
             height=780,
-            xaxis=dict(title="Timeline Index", domain=[0, 0.88]), # เผื่อช่องขวาไว้สำหรับแกน Dew Point
+            hovermode="x unified",
+            xaxis=dict(title="Timeline Index", domain=[0, 0.85]),
             
+            # แกนซ้ายหลัก
             yaxis=dict(
-                title="Temperature (°C) & N2 Flow (h3/h) [แกนซ้าย]",
-                titlefont=dict(color="#FF8D33"), tickfont=dict(color="#FF8D33")
+                title="Temperature (°C) & N2 Flow (h3/h)",
+                titlefont=dict(color="#FF8D33"),
+                tickfont=dict(color="#FF8D33")
             ),
+            
+            # แกนขวาหลัก (y2)
             yaxis2=dict(
-                title="Oxygen Concentration (ppm O2) [แกนขวาหลัก]",
-                titlefont=dict(color="#33FF57"), tickfont=dict(color="#33FF57"),
-                anchor="x", overlaying="y", side="right"
+                title="Oxygen Concentration (ppm O2)",
+                titlefont=dict(color="#33FF57"),
+                tickfont=dict(color="#33FF57"),
+                overlaying="y",
+                side="right"
             ),
+            
+            # แกนขวาสุดแยกสเกลอิสระ (y3)
             yaxis3=dict(
-                title="Dew Point [แกนขวาสุด - Auto Scale]",
-                titlefont=dict(color="#E333FF"), tickfont=dict(color="#E333FF"),
-                anchor="free", overlaying="y", side="right", position=0.95,
+                title="Dew Point (Auto-Scaled)",
+                titlefont=dict(color="#E333FF"),
+                tickfont=dict(color="#E333FF"),
+                overlaying="y",
+                side="right",
+                position=0.95,
                 autorange=True
-            ),
-            hovermode="x unified"
+            )
         )
 
         st.plotly_chart(fig, use_container_width=True)
