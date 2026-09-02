@@ -19,8 +19,8 @@ import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Integrated Process Dashboard - Final Stable Layout")
-st.subheader("พล็อตกราฟรวมแกนอัตโนมัติ ทนทานต่อไฟล์ดิบทุกเวอร์ชัน")
+st.title("🏭 Integrated Process Dashboard - Fixed Layout")
+st.subheader("พล็อตกราฟรวมแกนอัตโนมัติ แก้ไขข้อผิดพลาดของระบบแสดงผล")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -97,12 +97,12 @@ if uploaded_file is not None:
                 line=dict(color='#E333FF', width=2, dash='dot'), yaxis="y3"
             ))
 
-        # 3. ตกแต่ง Layout แยกระดับสเกลแกน Y (ปรับปรุงโครงสร้างแก้ ValueError)
+        # 3. ตั้งค่าการจัดวางแกน Y (แก้ไขโครงสร้างเพื่อแก้ไข ValueError 100%)
         fig.update_layout(
             template="plotly_dark",
             height=780,
             hovermode="x unified",
-            xaxis=dict(title="Timeline Index", domain=[0, 0.85]),
+            xaxis=dict(title="Timeline Index", domain=[0, 0.85]), # เว้นช่องขวาไว้ 15% สำหรับวางแกน Y
             
             # แกนซ้ายหลัก
             yaxis=dict(
@@ -120,13 +120,14 @@ if uploaded_file is not None:
                 side="right"
             ),
             
-            # แกนขวาสุดแยกสเกลอิสระ (y3)
+            # แกนขวาสุดแยกสเกลอิสระ (y3) - เปิด anchor='free' เพื่อให้ใช้คู่กับ position ได้โดยไม่พัง
             yaxis3=dict(
                 title="Dew Point (Auto-Scaled)",
                 titlefont=dict(color="#E333FF"),
                 tickfont=dict(color="#E333FF"),
                 overlaying="y",
                 side="right",
+                anchor="free",
                 position=0.95,
                 autorange=True
             )
