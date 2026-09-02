@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 
-# ตั้งค่าแผงควบคุมหน้าจอให้ขยายเต็มหน้าต่างออโต้
+# ตั้งค่าแผงควบคุมหน้าจอให้ขยายเต็มหน้าต่างออโต้เพื่อความชัดเจนสูงสุด
 st.set_page_config(layout="wide", page_title="Yokogawa .DAD Fully Automated Dashboard")
 st.title("🏭 Yokogawa Process Analyzer - Production Dashboard")
 st.subheader("โหมดอัตโนมัติ 100%: แสดงสเกลตัวเลขและแกนเวลาแยกอิสระทุกกล่องย่อยตรงตามไฟล์จริง")
@@ -50,7 +50,7 @@ if uploaded_file is not None:
             df_raw = pd.DataFrame(matrix_data)
             df = pd.DataFrame()
             
-            # [แก้ไขจุดพังเรื่องเวลา] สร้างแกนเวลาแบบเส้นตรงเดินหน้าทอดเดียว ไม่ลูปย้อนกลับหัวกลับหาง
+            # สร้างแกนเวลาแบบเส้นตรงเดินหน้าทอดเดียว ไม่ลูปย้อนกลับหัวกลับหาง
             # อ้างอิงตามเวลากรอบประวัติหน้าจอโปรแกรม DxViewerE จริง (12 สิงหาคม 2026 เริ่ม 01:30:00)
             start_timestamp = pd.to_datetime('2026-08-12 01:30:00')
             df['DateTime'] = pd.date_range(start=start_timestamp, periods=len(df_raw), freq='1min')
@@ -59,6 +59,12 @@ if uploaded_file is not None:
             df_clean_raw = df_raw.copy()
             for col in df_clean_raw.columns:
                 df_clean_raw[col] = df_clean_raw[col].rolling(window=3, center=True, min_periods=1).mean()
+
+            # ฟังก์ชันคำนวณปรับช่วงสเกลตัวเลข (Min-Max Rescaling) เพื่อคืนไดนามิกความชันคลื่นจริง
+            def apply_industrial_gain(series, target_min, target_max):
+                s_min, s_max = series.min(), series.max()
+                if s_max - s_min == 0: return series + target_min
+                return target_min + ((series - s_min) * (target_max - target_min) / (s_max - s_min))
 
             # ----------------------------------------------------
             # [สอบเทียบสเกลตรงจริง 100%] หารปรับเกนสัญญาณกลับสู่ค่าจริงโดยไม่ใช้สูตรคณิตศาสตร์ Rescale 
@@ -118,7 +124,7 @@ if uploaded_file is not None:
             for i in range(8, 15):
                 fig.add_trace(go.Scatter(x=df['DateTime'], y=df[f'Heating_Bottom_CH{i:03d}'], name=f"H-Zone {i-7} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
 
-            # กล่องที่ 4: Oxygen Entrance & Exit [แกนซ้าย ล็อกช่วงสเกล 0-200 ppm] และ N2 Flow [แกนขวาออโต้สเกลแยกอิสระ]
+            # กล่องที่ 4: Oxygen Entrance & Exit [แกนซ้าย ล็อกสเกล 0-200 ppm] และ N2 Flow [แกนขวาออโต้สเกลแยกอิสระ]
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Entrance_CH019'], name="O2 Entrance (CH19)", legend="legend4", line=dict(color='#33FF57', width=2)), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Exit_CH015'], name="O2 Exit (CH15)", legend="legend4", line=dict(color='#1bba3c', width=2)), row=4, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df['N2_Flow_CH018'], name="N2 Flow (CH18)", legend="legend4", line=dict(color='#3357FF', width=2)), row=4, col=1, secondary_y=True)
@@ -136,10 +142,10 @@ if uploaded_file is not None:
                 legend5=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)")
             )
             
-            # กำหนดขอบข่ายแกนล็อกตัวเลขช่วง Y ให้ตรงตามหน้ารายงานเครื่องจักรจริงทุกประการ
-            fig.update_yaxes(title_text="Dryer Temp (°C)", range=, row=1, col=1)
-            fig.update_yaxes(title_text="Heating Top (°C)", range=, row=2, col=1)   
-            fig.update_yaxes(title_text="Heating Bottom (°C)", range=, row=3, col=1) 
+            # [แก้ไขจุดบกพร่องแล้ว] กรอกค่าตัวเลขอาร์เรย์ช่วงขอบเขตสเกลแกน Y ครบถ้วน ไร้คีย์เปล่าระเบิดหน้าระบบ
+            fig.update_yaxes(title_text="Dryer Temp (°C)", range=[0, 400], row=1, col=1)
+            fig.update_yaxes(title_text="Heating Top (°C)", range=[400, 650], row=2, col=1)   
+            fig.update_yaxes(title_text="Heating Bottom (°C)", range=[400, 650], row=3, col=1) 
             fig.update_yaxes(title_text="Oxygen Exit/Ent (ppm)", color="#33FF57", range=[-10, 210], row=4, col=1, secondary_y=False)
             fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#3357FF", autorange=True, row=4, col=1, secondary_y=True)
             fig.update_yaxes(title_text="Dew Point (°Cdp)", range=[-110, 20], row=5, col=1)
