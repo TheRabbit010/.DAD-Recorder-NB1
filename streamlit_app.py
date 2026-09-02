@@ -1,157 +1,47 @@
-import streamlit as st
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
-def render_interactive_charts(df: pd.DataFrame):
-    """
-    ฟังก์ชันสำหรับสร้างและแสดงผล Interactive Graphs แยกตาม Zone
-    รองรับทั้งคอลัมน์แบบมาตรฐาน (CH001_MAX) และแบบมี Tag (CH001 [Z#1 Top]_MAX)
-    """
-    # 1. จัดสรรแกน เวลา (Datetime)
-    if "Datetime" not in df.columns:
-        if "Date" in df.columns and "Time" in df.columns:
-            df["Datetime"] = pd.to_datetime(df["Date"].astype(str) + " " + df["Time"].astype(str))
-        else:
-            df["Datetime"] = df.index
+# 1. โหลดข้อมูลจากไฟล์ .DAD (แก้ชื่อไฟล์ให้ตรงกับของคุณ)
+file_path = 'data_file.dad'
 
-    # ชุดสีมาตรฐาน 7 เฉดสีสำหรับ 7 โซน
-    colors = ["#8e44ad", "#2980b9", "#27ae60", "#d35400", "#f39c12", "#c0392b", "#16a085"]
+try:
+    # กรณีที่ 1: ข้อมูลคั่นด้วยช่องว่างหรือ Tab (พบบ่อยที่สุดในไฟล์ประเภทนี้)
+    df = pd.read_csv(file_path, sep=r'\s+', engine='python')
+except Exception as e:
+    # กรณีที่ 2: ถ้าเกิดข้อผิดพลาด ลองโหลดแบบคั่นด้วยเครื่องหมายจุลภาค (Comma)
+    df = pd.read_csv(file_path)
 
-    # ฟังก์ชันช่วยค้นหาชื่อคอลัมน์ใน DataFrame
-    def find_column(keywords):
-        for col in df.columns:
-            if all(kw in col for kw in keywords):
-                return col
-        return None
+# แสดงหน้าตาข้อมูล 5 แถวแรกเพื่อตรวจสอบชื่อคอลัมน์ใน Terminal
+print("--- ตรวจสอบข้อมูล 5 แถวแรก ---")
+print(df.head())
+print("-----------------------------\n")
 
-    # ==========================================
-    # Graph 1: Top Zones (CH001 - CH007 MAX)
-    # ==========================================
-    fig_top = go.Figure()
-    for i in range(1, 8):
-        ch_str = f"CH{str(i).zfill(3)}"
-        col_name = find_column([ch_str, "MAX"]) or find_column([f"Z#{i} Top"])
-        if col_name:
-            fig_top.add_trace(go.Scatter(
-                x=df["Datetime"], 
-                y=df[col_name], 
-                name=f"Z#{i} Top",
-                mode="lines", 
-                line=dict(width=1.8, color=colors[(i-1) % len(colors)]),
-                hovertemplate=f"Z#{i} Top: %{{y:.1f}} °C<extra></extra>"
-            ))
+# 2. ตรวจสอบและเลือกชื่อคอลัมน์มาพล็อต
+# ตัวอย่าง: สมมติว่ามีคอลัมน์ชื่อ 'Time' และ 'Value' (ให้เปลี่ยนเป็นชื่อคอลัมน์จริงของคุณ)
+x_column = df.columns[0] # เลือกคอลัมน์แรกเป็นแกน X
+y_column = df.columns[1] # เลือกคอลัมน์ที่สองเป็นแกน Y
 
-    fig_top.update_layout(
-        title="📐 Top Zones Temperature Profile (Z#1 - Z#7)",
-        xaxis_title="Date & Time",
-        yaxis_title="Temperature [°C]",
-        template="plotly_white",
-        height=400,
-        hovermode="x unified",
-        legend=dict(orientation="h", y=1.12, x=1, xanchor="right")
-    )
-    st.plotly_chart(fig_top, use_container_width=True)
+print(f"กำลังพล็อตกราฟโดยใช้แกน X: {x_column} และแกน Y: {y_column}")
 
-    # ==========================================
-    # Graph 2: Bottom Zones (CH008 - CH014 MAX)
-    # ==========================================
-    fig_bot = go.Figure()
-    for i in range(8, 15):
-        zone_num = i - 7
-        ch_str = f"CH{str(i).zfill(3)}"
-        col_name = find_column([ch_str, "MAX"]) or find_column([f"Z#{zone_num} Bottom"])
-        if col_name:
-            fig_bot.add_trace(go.Scatter(
-                x=df["Datetime"], 
-                y=df[col_name], 
-                name=f"Z#{zone_num} Bottom",
-                mode="lines", 
-                line=dict(width=1.8, color=colors[(zone_num-1) % len(colors)]),
-                hovertemplate=f"Z#{zone_num} Bottom: %{{y:.1f}} °C<extra></extra>"
-            ))
+# 3. สร้าง Interactive Graph ด้วย Plotly
+fig = px.line(
+    df, 
+    x=x_column, 
+    y=y_column, 
+    title=f"Interactive Graph จากไฟล์ .DAD ({y_column} vs {x_column})",
+    template="plotly_dark"  # มีธีมให้เลือก เช่น 'plotly', 'plotly_white', 'plotly_dark'
+)
 
-    fig_bot.update_layout(
-        title="📐 Bottom Zones Temperature Profile (Z#1 - Z#7)",
-        xaxis_title="Date & Time",
-        yaxis_title="Temperature [°C]",
-        template="plotly_white",
-        height=400,
-        hovermode="x unified",
-        legend=dict(orientation="h", y=1.12, x=1, xanchor="right")
-    )
-    st.plotly_chart(fig_bot, use_container_width=True)
+# ปรับแต่งเพิ่มเติมให้กราฟดูง่ายขึ้น (ซูมเฉพาะจุด, แสดงแถบเครื่องมือ)
+fig.update_layout(
+    hovermode="x unified", # แสดงค่าแกน X และ Y พร้อมกันเมื่อเอาเมาส์ไปชี้
+    xaxis_title=x_column,
+    yaxis_title=y_column
+)
 
-    # ==========================================
-    # Graph 3 & 4: Dryers & Dew Point (Side-by-Side)
-    # ==========================================
-    col_left, col_right = st.columns(2)
+# 4. เปิดแสดงผลกราฟบนเว็บเบราว์เซอร์อัตโนมัติ
+fig.show()
 
-    with col_left:
-        fig_dryer = go.Figure()
-        d1_col = find_column(["CH016", "MAX"]) or find_column(["Dryer #1"])
-        d2_col = find_column(["CH017", "MAX"]) or find_column(["Dryer #2"])
-        
-        if d1_col:
-            fig_dryer.add_trace(go.Scatter(x=df["Datetime"], y=df[d1_col], name="Dryer #1", line=dict(color="#2ecc71", width=2)))
-        if d2_col:
-            fig_dryer.add_trace(go.Scatter(x=df["Datetime"], y=df[d2_col], name="Dryer #2", line=dict(color="#e67e22", width=2)))
-
-        fig_dryer.update_layout(
-            title="🔥 Dryer Temperatures",
-            xaxis_title="Date & Time",
-            yaxis_title="Temperature [°C]",
-            template="plotly_white",
-            height=380,
-            hovermode="x unified"
-        )
-        st.plotly_chart(fig_dryer, use_container_width=True)
-
-    with col_right:
-        fig_dew = go.Figure()
-        dew_col = find_column(["CH020", "MAX"]) or find_column(["Dew Point"])
-        if dew_col:
-            fig_dew.add_trace(go.Scatter(x=df["Datetime"], y=df[dew_col], name="Dew Point", line=dict(color="#9b59b6", width=2)))
-
-        fig_dew.update_layout(
-            title="💧 Dew Point Profile",
-            xaxis_title="Date & Time",
-            yaxis_title="Dew Point [°Cdp]",
-            template="plotly_white",
-            height=380,
-            hovermode="x unified"
-        )
-        st.plotly_chart(fig_dew, use_container_width=True)
-
-    # ==========================================
-    # Graph 5: Gas & Atmosphere Control (Dual Y-Axis)
-    # ==========================================
-    fig_gas = make_subplots(specs=[[{"secondary_y": True}]])
-    o2_exit_col = find_column(["CH015", "MAX"]) or find_column(["O2 Exit"])
-    o2_ent_col = find_column(["CH019", "MAX"]) or find_column(["O2 Entrance"])
-    n2_col = find_column(["CH018", "MAX"]) or find_column(["N2 Flow"])
-
-    if o2_exit_col:
-        fig_gas.add_trace(go.Scatter(x=df["Datetime"], y=df[o2_exit_col], name="O2 Exit", line=dict(color="#e74c3c", width=2)), secondary_y=False)
-    if o2_ent_col:
-        fig_gas.add_trace(go.Scatter(x=df["Datetime"], y=df[o2_ent_col], name="O2 Entrance", line=dict(color="#3498db", width=2)), secondary_y=False)
-    if n2_col:
-        fig_gas.add_trace(go.Scatter(x=df["Datetime"], y=df[n2_col], name="N2 Flow Rate", line=dict(color="#2ecc71", width=1.5, dash="dash")), secondary_y=True)
-
-    fig_gas.update_layout(
-        title="🧪 Atmosphere & Gas Control",
-        xaxis_title="Date & Time",
-        template="plotly_white",
-        height=400,
-        hovermode="x unified"
-    )
-    fig_gas.update_yaxes(title_text="O2 Level [ppm]", secondary_y=False)
-    fig_gas.update_yaxes(title_text="N2 Flow Rate", secondary_y=True, showgrid=False)
-    st.plotly_chart(fig_gas, use_container_width=True)
-
-
-# ==========================================
-# เรียกใช้งานฟังก์ชัน (ตัวอย่างการต่อเข้ากับ Streamlit)
-# ==========================================
-if "converted_df" in st.session_state:
-    render_interactive_charts(st.session_state["converted_df"])
+# (ตัวเลือกเสริม) บันทึกกราฟเก็บไว้เป็นไฟล์ HTML เพื่อส่งต่อให้คนอื่นเปิดดูแบบ Interactive ได้
+# fig.write_html("interactive_chart.html")
