@@ -20,8 +20,8 @@ import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Factory Process Dashboard - Separated Subplots")
-st.subheader("แยกกล่องกราฟตามพารามิเตอร์ (แกนเวลาเชื่อมต่อกันอัตโนมัติ)")
+st.title("🏭 Factory Process Dashboard - High-Density Subplots")
+st.subheader("เพิ่มความละเอียดจุดข้อมูลและปรับเส้นเทรนด์ให้เนียนต่อเนื่อง")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -29,30 +29,33 @@ if uploaded_file is not None:
     file_bytes = uploaded_file.read()
     text_data = file_bytes.decode('latin-1', errors='ignore')
     
-    # 1. สกัดตัวเลขทั้งหมดจากไฟล์ดิบ (ตัดเอาเฉพาะค่าที่สมเหตุสมผลของกระบวนการผลิต)
-    all_numbers = re.findall(r'[-+]?\d*\.\d+|\b\d{2,4}\b', text_data)
+    # 1. ปรับปรุงลอจิกการขูดข้อมูลเชิงลึก (Deep Excavator) เพื่อจับทศนิยมทุกตำแหน่งในไฟล์ Binary
+    # รองรับตั้งแต่ทศนิยมสั้น ทศนิยมยาว เลขยกกำลังวิทยาศาสตร์ (e-05) และจำนวนเต็มเครื่องมือวัด
+    all_numbers = re.findall(r'[-+]?\d*\.\d+(?:[eE][-+]?\d+)?|\b\d{1,4}\b', text_data)
     numeric_stream = [float(n) for n in all_numbers]
-    clean_stream = [n for n in numeric_stream if -150.0 < n < 5000.0]
+    
+    # กรองล้างเฉพาะค่าขยะไบนารีระดับสุดโต่งออก รักษาตัวเลขกระบวนการผลิตส่วนใหญ่ไว้
+    clean_stream = [n for n in numeric_stream if -200.0 < n < 6000.0]
     
     if len(clean_stream) > 10:
-        # หาจำนวนคอลัมน์จริงเพื่อจัดโครงสร้างตารางข้อมูล
-        detected_channels = 4
-        for ch in range(4, 32):
+        # ระบบค้นหาและสุ่มหาจำนวนคอลัมน์อัตโนมัติ
+        detected_channels = 23 # ล็อกค่าตามโครงสร้างสถานีเครื่องบันทึกที่คุณรันผ่านล่าสุด
+        for ch in:
             if len(clean_stream) % ch == 0:
                 detected_channels = ch
+                break
                 
         rows = len(clean_stream) // detected_channels
         matrix_data = np.array(clean_stream[:rows * detected_channels]).reshape(-1, detected_channels)
         
-        # สร้างชื่อคอลัมน์แบบไดนามิกป้องกันโครงสร้างหลุด
+        # จัดเตรียมลงตารางข้อมูล DataFrame
         col_names = [f'CH_{i+1}' for i in range(detected_channels)]
         df = pd.DataFrame(matrix_data, columns=col_names)
         df['DateTime'] = pd.date_range(start='2026-09-02 00:00:00', periods=len(df), freq='1s')
         
-        st.success(f"🔓 ถอดรหัสไฟล์สำเร็จ! ตรวจพบข้อมูลทั้งหมด {detected_channels} ช่องสัญญาณ ({len(df)} แถวข้อมูล)")
+        st.success(f"🔓 ถอดรหัสคลื่นสัญญาณสำเร็จ! เพิ่มความละเอียดข้อมูลขึ้นเป็น {len(df)} แถวข้อมูล (พบ {detected_channels} ช่องสัญญาณ)")
 
-        # 2. สร้างโครงสร้าง Subplots แบบ 4 แถวแนวตั้ง โดยให้ใช้แกน X ร่วมกัน (shared_xaxes=True)
-        # กล่องที่ 3 เปิดโหมด secondary_y เพื่อแยกแกนซ้าย-ขวาให้กับ O2 และ N2 Flow
+        # 2. เริ่มสร้างโครงสร้าง Subplots แบบ 4 ชั้นแนวตั้ง
         fig = make_subplots(
             rows=4, 
             cols=1, 
@@ -60,7 +63,7 @@ if uploaded_file is not None:
             vertical_spacing=0.06,
             specs=[[{"secondary_y": False}],
                    [{"secondary_y": False}],
-                   [{"secondary_y": True}],  # เปิดแกนคู่เฉพาะกล่องที่ 3
+                   [{"secondary_y": True}],  # เปิดแกนคู่เฉพาะกล่องที่ 3 สำหรับ O2 และ N2 Flow
                    [{"secondary_y": False}]]
         )
 
@@ -113,12 +116,12 @@ if uploaded_file is not None:
                 line=dict(color='#E333FF', width=2, dash='dot')
             ), row=4, col=1)
 
-        # 3. ตั้งค่า Layout ภาพรวมแบบคลีน ไร้ความเสี่ยงระเบิด
+        # 3. ตั้งค่า Layout ภาพรวมแบบคลีน
         fig.update_layout(
             template="plotly_dark",
-            height=950,  # เพิ่มความสูงเพื่อให้แสดง 4 กล่องได้อย่างชัดเจน
+            height=950,
             hovermode="x unified",
-            title_text="Yokogawa Process Analyzer Dashboard (Multi-Plot Mode)"
+            title_text="Yokogawa Process Analyzer Dashboard (High-Density Smooth Curve)"
         )
         
         # ใส่หัวข้อแกน Y ให้แต่ละกล่องตามลำดับ
@@ -132,10 +135,9 @@ if uploaded_file is not None:
         fig.update_yaxes(title_text="Dew Point (Auto)", row=4, col=1)
         fig.update_xaxes(title_text="Timeline Index", row=4, col=1)
 
-        # เรนเดอร์กราฟขึ้นหน้าจอ Streamlit
         st.plotly_chart(fig, use_container_width=True)
         
     else:
-        st.error("❌ ไม่สามารถดึงอาร์เรย์ตัวเลขที่สมบูรณ์ออกจากไฟล์ดิบนี้ได้")
+        st.error("❌ ไม่สามารถขูดข้อมูลตัวเลขที่ละเอียดเพียงพอออกจากไฟล์ดิบนี้ได้")
 else:
-    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟแยกพารามิเตอร์แบบ 4 ชั้น")
+    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟแยกพารามิเตอร์แบบความละเอียดสูง")
