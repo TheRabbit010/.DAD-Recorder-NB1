@@ -19,8 +19,8 @@ from plotly.subplots import make_subplots
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Factory Process Master Dashboard - Whitespace Tokenizer Engine")
-st.subheader("แก้ไขลอจิกการแยกคอลัมน์ ดึงเฉพาะค่าตัวเลขดิบจริงจากไฟล์ Yokogawa .DAD ตรงช่อง 100%")
+st.title("🏭 Factory Process Master Dashboard - Line Harvester Engine")
+st.subheader("พล็อตกราฟ 5 ชั้น ปลดล็อกและจัดคอลัมน์จากไฟล์ Yokogawa .DAD อัตโนมัติ")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -28,35 +28,40 @@ if uploaded_file is not None:
     file_bytes = uploaded_file.read()
     text_data = file_bytes.decode('latin-1', errors='ignore')
     
-    # 1. แยกข้อมูลตามบรรทัด และสกัด Token ตัวเลขด้วยเครื่องหมายเว้นวรรค (Space/Tab) 
-    # วิธีนี้จะดึงโครงสร้างตารางข้อมูลดิบได้เสถียรกว่าระบบข้อความ Regex แบบเดิมมาก
+    # 1. ลอจิกควานหาข้อความตัวเลขรายบรรทัดแบบยืดหยุ่นสูง (Universal Token Harvester)
     lines = text_data.splitlines()
-    parsed_rows = []
+    all_numeric_rows = []
     
     for line in lines:
-        # แยกคำดิบด้วย Space หรือ Tab
         tokens = line.split()
-        row_numbers = []
+        row_values = []
         for token in tokens:
             try:
-                # พยายามล้างอักขระพิเศษรอบตัวเลขและแปลงเป็นทศนิยม
-                cleaned_token = ''.join(c for c in token if c.isdigit() or c in '.-+eE')
-                if cleaned_token:
-                    val = float(cleaned_token)
-                    row_numbers.append(val)
+                # ทำความสะอาดตัวหนังสือแปลกปลอมและกรองให้เหลือเฉพาะทศนิยม/จำนวนเต็ม
+                cleaned = ''.join(c for c in token if c.isdigit() or c in '.-+eE')
+                if cleaned:
+                    row_values.append(float(cleaned))
             except ValueError:
                 continue
-        # กรองเก็บเฉพาะแถวที่มีข้อมูลช่องสัญญาณตัวเลขอยู่จริงเกินกว่า 20 ช่อง
-        if len(row_numbers) >= 20:
-            parsed_rows.append(row_numbers[:23]) # ดึงสูงสุดไม่เกิน 23 คอลัมน์
+        # บันทึกเฉพาะบรรทัดที่มีพารามิเตอร์การวัดซ่อนอยู่ (มีตัวเลขอย่างน้อย 1 ช่องขึ้นไป)
+        if len(row_values) > 0:
+            all_numeric_rows.append(row_values)
 
-    if len(parsed_rows) > 5:
-        # กำหนดความยาวคอลัมน์จริงจากแถวข้อมูลส่วนใหญ่ที่ขูดได้
-        detected_channels = min(23, max(len(r) for r in parsed_rows))
-        matrix_data = [r[:detected_channels] for r in parsed_rows if len(r) >= detected_channels]
+    if len(all_numeric_rows) > 5:
+        # หาจำนวนช่องสัญญาณจริงจากโครงสร้างแถวส่วนใหญ่ในไฟล์
+        detected_channels = max(len(r) for r in all_numeric_rows)
         
-        # จัดตารางข้อมูลลง DataFrame แยกรายคอลัมน์สากล 
-        df_raw = pd.DataFrame(matrix_data)
+        # ปรับความยาวของทุกแถวให้เท่ากันเพื่อไม่ให้เมทริกซ์แตก (Padding Logic)
+        normalized_data = []
+        for r in all_numeric_rows:
+            if len(r) < detected_channels:
+                r = r + [np.nan] * (detected_channels - len(r))
+            normalized_data.append(r[:detected_channels])
+            
+        df_raw = pd.DataFrame(normalized_data)
+        
+        # กรองล้างแถวขยะส่วนหัวที่เป็นเลขที่อยู่ Address ทิ้ง
+        df_raw = df_raw.dropna(thresh=min(5, detected_channels)).reset_index(drop=True)
         df = pd.DataFrame()
         
         # ⏱️ แถบตั้งค่าเวลาทำงานด้านซ้ายมือ (Sidebar)
@@ -70,7 +75,7 @@ if uploaded_file is not None:
         start_timestamp = pd.to_datetime(f"{start_date} {start_time}")
         df['DateTime'] = pd.date_range(start=start_timestamp, periods=len(df_raw), freq=freq_code)
         
-        # 🛡️ ระบบฟิลเตอร์เคลียร์สัญญาณรบกวน (Moving Average)
+        # 🛡️ ระบบฟิลเตอร์เคลียร์นอยส์สไปก์และลดสัญญาณรบกวน (Moving Average)
         st.sidebar.markdown("---")
         st.sidebar.header("🛡️ ตัวกรองสัญญาณรบกวน (Signal Filter)")
         clean_spikes = st.sidebar.checkbox("เปิดระบบล้างยอดสวิงแหลม (Remove Spikes)", value=True)
@@ -86,39 +91,25 @@ if uploaded_file is not None:
                 df_clean_raw[col] = df_clean_raw[col].rolling(window=window_size, center=True, min_periods=1).mean()
 
         # ----------------------------------------------------
-        # ผูกตำแหน่งเซนเซอร์รายช่องสัญญาณ (0-Based Array Index) ตามผังโปรแกรมคอมพิวเตอร์ของคุณจริง
+        # ล็อกตำแหน่งช่องสัญญาณตามข้อมูลจริงที่คุณระบุมา (CH1 - CH20)
         # ----------------------------------------------------
-        # CH1 - CH7 คือ Heating Zone Top (ดัชนีคอลัมน์ที่ 0 ถึง 6)
+        # CH1 - CH7 คือ Heating Zone Top
         for i in range(min(7, detected_channels)):
             df[f'Heating_Top_Z{i+1}'] = df_clean_raw.iloc[:, i]
             
-        # CH8 - CH14 คือ Heating Zone Bottom (ดัชนีคอลัมน์ที่ 7 ถึง 13)
-        for i in range(min(7, detected_channels - 7)):
+        # CH8 - CH14 คือ Heating Zone Bottom
+        for i in range(min(7, max(0, detected_channels - 7))):
             df[f'Heating_Bottom_Z{i+1}'] = df_clean_raw.iloc[:, 7 + i]
             
-        # CH15 คือ Exit O2 (ดัชนีคอลัมน์ที่ 14)
+        # CH15 คือ Exit O2 / CH16 Dryer #1 / CH17 Dryer #2 / CH18 N2 Flow / CH19 Entrance O2 / CH20 Dew Point
         if detected_channels > 14: df['O2_Exit'] = df_clean_raw.iloc[:, 14]
-        else: df['O2_Exit'] = 0.0
-        
-        # CH16 และ CH17 คือ Dryer #1 และ Dryer #2 (ดัชนีคอลัมน์ที่ 15 และ 16)
         if detected_channels > 15: df['Dryer_1'] = df_clean_raw.iloc[:, 15]
-        else: df['Dryer_1'] = 0.0
         if detected_channels > 16: df['Dryer_2'] = df_clean_raw.iloc[:, 16]
-        else: df['Dryer_2'] = 0.0
-        
-        # CH18 คือ N2 Flow (ดัชนีอาร์เรย์คอลัมน์ที่ 17)
         if detected_channels > 17: df['N2_Flow'] = df_clean_raw.iloc[:, 17]
-        else: df['N2_Flow'] = 0.0
-        
-        # CH19 คือ Entrance O2 (ดัชนีอาร์เรย์คอลัมน์ที่ 18)
         if detected_channels > 18: df['O2_Entrance'] = df_clean_raw.iloc[:, 18]
-        else: df['O2_Entrance'] = 0.0
-        
-        # CH20 คือ Dew Point (ดัชนีอาร์เรย์คอลัมน์ที่ 19)
         if detected_channels > 19: df['Dew_Point'] = df_clean_raw.iloc[:, 19]
-        else: df['Dew_Point'] = 0.0
 
-        st.success(f"🔓 แตกตารางข้อมูลผ่าน Whitespaceสำเร็จ! พล็อตสัญญาณกระบวนการผลิตจริง ({len(df)} แถว)")
+        st.success(f"🔓 ถอดรหัสผ่านระบบสแกนบรรทัดสำเร็จ! กำลังสร้างแดชบอร์ดข้อมูล ({len(df)} แถวข้อมูล)")
 
         # 2. เริ่มสร้างโครงสร้าง Subplots แบบ 5 ชั้นแนวตั้ง ลิงก์แกนเวลาร่วมกัน
         fig = make_subplots(
@@ -127,8 +118,10 @@ if uploaded_file is not None:
         )
 
         # กล่องที่ 1: Dryer #1 & Dryer #2
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_1'], name="Dryer #1", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_2'], name="Dryer #2", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
+        if 'Dryer_1' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_1'], name="Dryer #1", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
+        if 'Dryer_2' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_2'], name="Dryer #2", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
 
         # กล่องที่ 2: Heating Zone 1-7 (Top)
         for i in range(1, 8):
@@ -141,17 +134,21 @@ if uploaded_file is not None:
                 fig.add_trace(go.Scatter(x=df['DateTime'], y=df[f'Heating_Bottom_Z{i}'], name=f"H-Zone {i} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
 
         # กล่องที่ 4: Oxygen Entrance & Exit [แกนซ้าย] และ N2 Flow [แกนขวาออโต้สเกลแยกอิสระ]
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Entrance'], name="O2 Entrance (ppm)", legend="legend4", line=dict(color='#33FF57', width=2)), row=4, col=1, secondary_y=False)
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Exit'], name="O2 Exit (ppm)", legend="legend4", line=dict(color='#1bba3c', width=2)), row=4, col=1, secondary_y=False)
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['N2_Flow'], name="N2 Flow (h3/h)", legend="legend4", line=dict(color='#3357FF', width=2)), row=4, col=1, secondary_y=True)
+        if 'O2_Entrance' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Entrance'], name="O2 Entrance (ppm)", legend="legend4", line=dict(color='#33FF57', width=2)), row=4, col=1, secondary_y=False)
+        if 'O2_Exit' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Exit'], name="O2 Exit (ppm)", legend="legend4", line=dict(color='#1bba3c', width=2)), row=4, col=1, secondary_y=False)
+        if 'N2_Flow' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['N2_Flow'], name="N2 Flow (h3/h)", legend="legend4", line=dict(color='#3357FF', width=2)), row=4, col=1, secondary_y=True)
 
         # กล่องที่ 5: Dew Point
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dew_Point'], name="Dew Point", legend="legend5", line=dict(color='#E333FF', width=2, dash='dot')), row=5, col=1)
+        if 'Dew_Point' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dew_Point'], name="Dew Point", legend="legend5", line=dict(color='#E333FF', width=2, dash='dot')), row=5, col=1)
 
         # 3. จัดสรรผังคำอธิบายกราฟไว้ขวาสุดประจำกล่องย่อยของแต่ละชั้นอย่างเป็นระเบียบ
         fig.update_layout(
             template="plotly_dark", height=1100, hovermode="x unified",
-            title_text="Yokogawa Process Analyzer Dashboard (True Data Engine)",
+            title_text="Yokogawa Process Analyzer Dashboard (Line Harvester Engine)",
             legend1=dict(traceorder="normal", x=1.02, y=0.94, bgcolor="rgba(0,0,0,0)"),
             legend2=dict(traceorder="normal", x=1.02, y=0.75, bgcolor="rgba(0,0,0,0)"),
             legend3=dict(traceorder="normal", x=1.02, y=0.55, bgcolor="rgba(0,0,0,0)"),
@@ -159,7 +156,7 @@ if uploaded_file is not None:
             legend5=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)")
         )
         
-        # ปรับขอบแกนเป็น Autorange ทุกหน้าต่าง เพื่อให้เส้นพุ่งและจมตามค่าจริงของแต่ละสถานีเซนเซอร์อย่างเป็นอิสระ
+        # ตั้งค่าระบบปรับสเกลอัตโนมัติ (Autorange=True) เพื่อคืนรูปความชันและไดนามิกที่ถูกต้อง 100%
         fig.update_yaxes(title_text="Dryer Temp (°C)", autorange=True, row=1, col=1)
         fig.update_yaxes(title_text="Heating Top (°C)", autorange=True, row=2, col=1)   
         fig.update_yaxes(title_text="Heating Bottom (°C)", autorange=True, row=3, col=1) 
@@ -171,6 +168,6 @@ if uploaded_file is not None:
         st.plotly_chart(fig, use_container_width=True)
         
     else:
-        st.error("❌ ลอจิก Tokenizer ไม่พบแถวข้อมูลตัวเลขที่จัดเรียงเป็นตารางสากลในไฟล์ .DAD นี้")
+        st.error("❌ ลอจิกไม่พบข้อมูลตัวเลขที่สามารถจัดสรรตารางได้ในไฟล์นี้")
 else:
-    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อแสดงแผงควบคุมเวอร์ชันถอดรหัสแม่นยำสูงสุด")
+    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟตามผังเซนเซอร์เครื่องจักรจริง")
