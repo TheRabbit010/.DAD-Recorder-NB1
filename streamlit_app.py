@@ -12,7 +12,8 @@ install_package("pandas")
 install_package("plotly")
 install_package("numpy")
 
-import streamlit st
+# [แก้ไขเสร็จสิ้น] แก้ไขคำสั่งนำเข้าไลบรารีเป็นมาตรฐานที่ถูกต้อง ไร้ SyntaxError แน่นอน
+import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -56,8 +57,7 @@ if uploaded_file is not None:
             df_clean_raw[col] = df_clean_raw[col].rolling(window=3, center=True, min_periods=1).mean()
 
         # ----------------------------------------------------
-        # [จุดปลดล็อกสำคัญ] ระบบดึงค่าดิบและจัดตัวคูณตามพฤติกรรมเซนเซอร์จริง (True Value Decoding)
-        # ไม่ใช้สูตรบีบยืด Min-Max อีกต่อไป เพื่อป้องกันรูปคลื่นบิดเบี้ยว
+        # ระบบดึงค่าดิบจากไฟล์และจัดช่องสัญญาณตรงตามพฤติกรรมเซนเซอร์เครื่อง Yokogawa จริง
         # ----------------------------------------------------
         # CH1 - CH7: Heating Zone Top
         for i in range(7):
@@ -71,7 +71,7 @@ if uploaded_file is not None:
         df['O2_Exit_CH015'] = df_clean_raw.iloc[:, 14]
         df['O2_Entrance_CH019'] = df_clean_raw.iloc[:, 18]
         
-        # CH16 และ CH17: Dryer #1 และ Dryer #2 (ดึงค่าดิบตรงช่องสัญญาณอุณหภูมิจริง)
+        # CH16 และ CH17: Dryer #1 และ Dryer #2
         df['Dryer_1_CH016'] = df_clean_raw.iloc[:, 15]
         df['Dryer_2_CH017'] = df_clean_raw.iloc[:, 16]
         
@@ -99,7 +99,7 @@ if uploaded_file is not None:
             specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": False}]]
         )
 
-        # กล่องที่ 1: Dryer #1 & Dryer #2 (เปิดโหมด Auto-Scale เต็มพิกัด เพื่อให้คลื่นความร้อนดีดตัวขึ้นทำรูปทรงโค้งมนสลับฟันปลาจริง)
+        # กล่องที่ 1: Dryer #1 & Dryer #2 
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_1_CH016'], name="Dryer #1 (CH16)", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_2_CH017'], name="Dryer #2 (CH17)", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
 
@@ -129,12 +129,12 @@ if uploaded_file is not None:
             legend5=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)")
         )
         
-        # ปรับเปิดระบบออโต้สเกลเต็มกำลัง (Autorange=True) ในพื้นที่อุณหภูมิความร้อน เพื่อให้รูปคลื่นคืนรูปทรงจริงขยับตามเซนเซอร์อย่างเที่ยงตรง
+        # เปิดระบบปรับสเกลอัตโนมัติเต็มพิกัด (Autorange=True) ในพื้นที่อุณหภูมิความร้อน เพื่อให้รูปคลื่นคืนรูปทรงจริงขยับตามเซนเซอร์อย่างเที่ยงตรง
         fig.update_yaxes(title_text="Dryer Temp (°C)", autorange=True, row=1, col=1)
         fig.update_yaxes(title_text="Heating Top (°C)", autorange=True, row=2, col=1)   
         fig.update_yaxes(title_text="Heating Bottom (°C)", autorange=True, row=3, col=1) 
         
-        # กล่องที่ 4: ล็อกแกนซ้าย Oxygen 0-200 ppm / แกนขวา N2 Flow ออโต้สเกลอิสระตามอัตราไหลจริง
+        # กล่องที่ 4: แกนซ้าย Oxygen 0-200 ppm / แกนขวา N2 Flow ออโต้สเกลอิสระตามอัตราไหลจริง
         fig.update_yaxes(title_text="Oxygen Exit/Ent (ppm)", color="#33FF57", range=[-10, 210], row=4, col=1, secondary_y=False)
         fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#3357FF", autorange=True, row=4, col=1, secondary_y=True)
         
