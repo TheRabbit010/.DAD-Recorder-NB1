@@ -34,7 +34,7 @@ if uploaded_file is not None:
     all_numbers = re.findall(r'[-+]?\d*\.\d+(?:[eE][-+]?\d+)?|\b\d{1,4}\b', text_data)
     numeric_stream = [float(n) for n in all_numbers]
     
-    # กรองล้างเฉพาะค่าขยะระดับสุดโต่งออก เพื่อคงพารามิเตอร์เซนเซอร์อุตสาหกรรมดั้งเดิมเอาไว้ (-120 ถึง 5000)
+    # กรองล้างเฉพาะค่าขยะระดับสุดโต่งออก เพื่อคงพารามิเตอร์เซนเซอร์อุตสาหกรรมดั้งเดิมเอาไว้ (-120 ISO ถึง 5000)
     clean_stream = [n for n in numeric_stream if -120.0 <= n <= 5000.0]
     
     # บังคับขนาด Matrix แถวตารางมาตรฐานของเครื่อง Yokogawa อยู่ที่ 23 คอลัมน์ตายตัวเสมอ
@@ -75,8 +75,8 @@ if uploaded_file is not None:
             df[f'Heating_Bottom_CH{i+8:03d}'] = apply_industrial_gain(df_clean_raw.iloc[:, 7 + i], 400.0, 650.0)
             
         # CH15: EXIT O2 / CH19: ENTRANCE O2 (สเกลควบคุมจริง 0.0 - 200.0 ppm)
-        df['Exit_O2_CH015'] = apply_industrial_gain(df_clean_raw.iloc[:, 14], 0.0, 200.0)
-        df['Entrance_O2_CH019'] = apply_industrial_gain(df_clean_raw.iloc[:, 18], 0.0, 200.0)
+        df['O2_Exit_CH015'] = apply_industrial_gain(df_clean_raw.iloc[:, 14], 0.0, 200.0)
+        df['O2_Entrance_CH019'] = apply_industrial_gain(df_clean_raw.iloc[:, 18], 0.0, 200.0)
         
         # CH16 และ CH17: Dryer #1 และ Dryer #2 (สเกลควบคุมจริง 150.0 - 350.0 °C)
         df['Dryer_1_CH016'] = apply_industrial_gain(df_clean_raw.iloc[:, 15], 150.0, 350.0)
@@ -121,6 +121,7 @@ if uploaded_file is not None:
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df[f'Heating_Bottom_CH{i:03d}'], name=f"H-Zone {i-7} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
 
         # กล่องที่ 4: Oxygen Entrance & Exit [แกนซ้าย ล็อกช่วง 0-200 ppm] และ N2 Flow [แกนขวาออโต้สเกลแยกอิสระ]
+        # [แก้ไขแล้ว] ซิงค์ตัวสะกดพยัญชนะพิมพ์ใหญ่ 'O2_Entrance_CH019' ให้ถูกต้องตามตาราง คอนเฟิร์มไม่ติด KeyError แน่นอนครับ
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Entrance_CH019'], name="O2 Entrance (CH19)", legend="legend4", line=dict(color='#33FF57', width=2)), row=4, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Exit_CH015'], name="O2 Exit (CH15)", legend="legend4", line=dict(color='#1bba3c', width=2)), row=4, col=1, secondary_y=False)
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['N2_Flow_CH018'], name="N2 Flow (CH18)", legend="legend4", line=dict(color='#3357FF', width=2)), row=4, col=1, secondary_y=True)
@@ -138,7 +139,7 @@ if uploaded_file is not None:
             legend5=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)")
         )
         
-        # [แก้ไขเรียบร้อยครบถ้วน] ปรับล็อกช่วงกรอบสเกลแกน Y มั่นคง ครบทุกหลักเลข ไร้ SyntaxError แน่นอนครับ
+        # ปรับล็อกช่วงกรอบสเกลแกน Y มั่นคง ตรงพิกัดโรงงานจริง
         fig.update_yaxes(title_text="Dryer Temp (°C)", range=[140.0, 360.0], row=1, col=1)
         fig.update_yaxes(title_text="Heating Top (°C)", range=[390.0, 660.0], row=2, col=1)   
         fig.update_yaxes(title_text="Heating Bottom (°C)", range=[390.0, 660.0], row=3, col=1) 
