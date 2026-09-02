@@ -15,12 +15,13 @@ install_package("numpy")
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Integrated Process Dashboard - Core Layout Engine")
-st.subheader("พล็อตกราฟรวมแกนควบคุมกระบวนการผลิตผ่านโครงสร้างยืดหยุ่นสูง")
+st.title("🏭 Integrated Process Dashboard - Ultra Clean Layout")
+st.subheader("พล็อตกราฟรวมแกนควบคุมกระบวนการผลิต (เวอร์ชันแก้ปัญหา ValueError)")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -50,93 +51,67 @@ if uploaded_file is not None:
         
         st.success(f"🔓 ถอดรหัสไฟล์สำเร็จ! ตรวจพบข้อมูลทั้งหมด {detected_channels} ช่องสัญญาณ ({len(df)} แถวข้อมูล)")
 
-        fig = go.Figure()
+        # 2. เปิดระบบกราฟแกนคู่ (Secondary Y)
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
 
         # ----------------------------------------------------
-        # กลุ่มแกน Y ด้านซ้าย: Dryer, Heating, N2 Flow
+        # กลุ่มแกน Y ด้านซ้าย: Dryer, Heating, N2 Flow (secondary_y=False)
         # ----------------------------------------------------
-        # พล็อต Dryer #1 และ #2
         if 'CH_1' in df.columns:
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_1'], name="Dryer #1", line=dict(color='#FF5733', width=2.5)))
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_1'], name="Dryer #1", line=dict(color='#FF5733', width=2.5)), secondary_y=False)
         if 'CH_2' in df.columns:
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_2'], name="Dryer #2", line=dict(color='#FF8D33', width=2.5)))
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_2'], name="Dryer #2", line=dict(color='#FF8D33', width=2.5)), secondary_y=False)
 
-        # พล็อตอัตราไหล N2 Flow ไว้ฝั่งซ้ายร่วมด้วย
         if 'CH_4' in df.columns:
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_4'], name="N2 Flow (h3/h)", line=dict(color='#3357FF', width=2)))
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_4'], name="N2 Flow (h3/h)", line=dict(color='#3357FF', width=2)), secondary_y=False)
 
         # Heating Zone 1-7: Top (เส้นทึบ)
         heat_start_idx = 5
         for i in range(0, 7):
             ch_name = f'CH_{heat_start_idx + i}'
             if ch_name in df.columns:
-                fig.add_trace(go.Scatter(x=df['DateTime'], y=df[ch_name], name=f"Heating Z{i+1} (Top)", line=dict(width=1.5)))
+                fig.add_trace(go.Scatter(x=df['DateTime'], y=df[ch_name], name=f"Heating Z{i+1} (Top)", line=dict(width=1.5)), secondary_y=False)
 
         # Heating Zone 8-14: Bottom (เส้นประ)
         for i in range(7, 14):
             ch_name = f'CH_{heat_start_idx + i}'
             if ch_name in df.columns:
-                fig.add_trace(go.Scatter(x=df['DateTime'], y=df[ch_name], name=f"Heating Z{i+1} (Bottom)", line=dict(width=1.5, dash='dash')))
+                fig.add_trace(go.Scatter(x=df['DateTime'], y=df[ch_name], name=f"Heating Z{i+1} (Bottom)", line=dict(width=1.5, dash='dash')), secondary_y=False)
 
         # ----------------------------------------------------
-        # กลุ่มแกน Y ด้านขวา (Right Axis): ปริมาณออกซิเจน ppm O2
+        # กลุ่มแกน Y ด้านขวา: ปริมาณออกซิเจน ppm O2 (secondary_y=True)
         # ----------------------------------------------------
         if 'CH_3' in df.columns:
             fig.add_trace(go.Scatter(
                 x=df['DateTime'], y=df['CH_3'], name="Oxygen (ppm O2)", 
-                line=dict(color='#33FF57', width=2), yaxis="y2"
-            ))
+                line=dict(color='#33FF57', width=2)
+            ), secondary_y=True)
 
         # ----------------------------------------------------
-        # กลุ่มแกน Y ด้านขวาเยื้อง (Far Right Axis): Dew Point
+        # กลุ่มแกน Y เสริมด้านขวา: Dew Point (แชร์แกนขวาหลักร่วมกัน)
         # ----------------------------------------------------
         last_ch_name = f'CH_{detected_channels}'
         if detected_channels >= 5 and last_ch_name in df.columns:
             fig.add_trace(go.Scatter(
                 x=df['DateTime'], y=df[last_ch_name], name="Dew Point", 
-                line=dict(color='#E333FF', width=2, dash='dot'), yaxis="y3"
-            ))
+                line=dict(color='#E333FF', width=2, dash='dot')
+            ), secondary_y=True)
 
-        # 3. ตั้งค่าการจัดวางแกน Layout พื้นฐานหลักเพื่อป้องกันข้อผิดพลาดเด็ดขาด
+        # 3. ตั้งค่าแบบคลีนที่สุด (ลบคีย์เสริมยุ่งเหยิงทิ้งทั้งหมด เพื่อไม่ให้เกิดข้อผิดพลาดเด็ดขาด)
         fig.update_layout(
             template="plotly_dark",
-            height=780,
-            hovermode="x unified",
-            xaxis=dict(title="Timeline Index", domain=[0, 0.85]),
-            yaxis=dict(
-                title="Temperature (°C) & N2 Flow (h3/h) [แกนซ้าย]",
-                titlefont=dict(color="#FF8D33"),
-                tickfont=dict(color="#FF8D33")
-            )
+            height=750,
+            hovermode="x unified"
         )
         
-        # 4. ประกาศขยายแกน Y2 และ Y3 เสริมแยกบรรทัด เพื่อเลี่ยงการเกิดความขัดแย้งของดิกชันนารี
-        fig.update_layout(
-            yaxis2=dict(
-                title="Oxygen Concentration (ppm O2) [แกนขวาหลัก]",
-                titlefont=dict(color="#33FF57"),
-                tickfont=dict(color="#33FF57"),
-                overlaying="y",
-                side="right"
-            )
-        )
-        
-        fig.update_layout(
-            yaxis3=dict(
-                title="Dew Point [แกนขวาสุด - Auto Scale]",
-                titlefont=dict(color="#E333FF"),
-                tickfont=dict(color="#E333FF"),
-                overlaying="y",
-                side="right",
-                anchor="free",
-                position=0.94,
-                autorange=True
-            )
-        )
+        # ใส่ชื่อกำกับแกนทีละคำสั่งผ่านฟังก์ชันมาตรฐาน
+        fig.update_xaxes(title_text="Timeline Index")
+        fig.update_yaxes(title_text="Temperature (°C) & N2 Flow (h3/h)", color="#FF8D33", secondary_y=False)
+        fig.update_yaxes(title_text="Oxygen (ppm O2) & Dew Point (Auto-Scaled)", color="#33FF57", secondary_y=True)
 
         st.plotly_chart(fig, use_container_width=True)
         
     else:
-        st.error("❌ ไม่สามารถดึงอาร์เรย์ตัวเลขที่สมบูรณ์ออกจากไฟล์ดิบนี้ได้ รบกวนตรวจสอบว่าไฟล์มีขนาด 0 KB หรือไม่")
+        st.error("❌ ไม่สามารถดึงอาร์เรย์ตัวเลขที่สมบูรณ์ออกจากไฟล์ดิบนี้ได้")
 else:
     st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟกระบวนการผลิตรวมแบบ All-in-One")
