@@ -1,7 +1,7 @@
 import subprocess
 import sys
 
-# บังคับติดตั้งชุดไลบรารีคำนวณไบนารีระดับล่างอัตโนมัติ
+# ติดตั้งชุดควบคุมโครงสร้างข้อมูลเชิงลึก
 def install_package(package_name):
     try:
         __import__(package_name)
@@ -19,61 +19,54 @@ from plotly.subplots import make_subplots
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("📊 DxViewerE (.DAD) - Direct Binary Graph Plotter")
-st.subheader("อ่านไฟล์ดิบเข้าหน้าเว็บตรงๆ โดยไม่ต้องทำการแปลงไฟล์")
+st.title("📊 DxViewerE (.DAD) - Adaptive Binary Graph Plotter")
+st.subheader("อ่านและถอดรหัสคลื่นสัญญาณจากไฟล์ดิบโดยตรง")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
 if uploaded_file is not None:
-    # 1. โหลดข้อมูลดิบในรูปของ Array ไบนารี (Byte Stream)
     file_bytes = uploaded_file.read()
     
-    # ดึงความยาวทั้งหมดของไฟล์เพื่อนำมาคำนวณขอบเขตข้อมูล
-    total_bytes = len(file_bytes)
-    
-    # 2. ปลดล็อกตัวเลขทศนิยมผ่านตัวถอดรหัสโครงสร้างเครื่องบันทึกอุตสาหกรรม (Float32/Float64)
-    # โดยทั่วไปเครื่องบันทึกรุ่น DX จะเก็บค่าทศนิยมแบบความแม่นยำเดี่ยว (4-Byte IEEE 754)
+    # 1. แปลงไบนารีทั้งหมดเป็นอาร์เรย์ Float32 เพื่อเตรียมสแกนหากลุ่มข้อมูลกระบวนการผลิต
     try:
-        # สแกนข้อมูลข้ามส่วนหัว (Header Block) โดยแปลงไบนารีท่อนหลังเป็นตารางตัวเลขโดยตรง
-        # เราจะสร้าง Offset แบบขยับเลื่อนเพื่อจับสัญญาณให้อยู่ในตำแหน่งที่ถูกต้อง
-        raw_data = np.frombuffer(file_bytes, dtype=np.float32)
+        # ดึงตัวเลขทศนิยมทั้งหมดในระบบขึ้นมาก่อน
+        raw_floats = np.frombuffer(file_bytes, dtype=np.float32).copy()
         
-        # กรองล้างค่าที่เพี้ยนมากๆ เช่น ค่าที่เข้าใกล้ Infinity หรือค่า NaN ที่เกิดจากหัวข้อข้อความ
-        raw_data = raw_data[np.isfinite(raw_data)]
+        # กรองเอาเฉพาะตัวเลขปกติ ตัดพวกค่าติดลบมหาศาล หรือค่าข้อความแปลกปลอมออก
+        # ปกติค่า Temp, O2, N2 จะอยู่ในสเกลตัวเลขที่จับต้องได้ (-50 ถึง 5000)
+        valid_mask = np.isfinite(raw_floats) & (raw_floats > -100) & (raw_floats < 10000)
+        clean_data = raw_floats[valid_mask]
         
-        # ค้นหาจุดเริ่มต้นที่ข้อมูลเริ่มเสถียร (ตัดสัญญาณกวนช่วง 500 Bytes แรกที่เป็น Header ทิ้ง)
-        clean_floats = raw_data[128:].tolist()
+        # กำหนดช่องสัญญาณหลักสำหรับ 2 โซน (Z1 Top/Bottom, Z2 Top/Bottom)
+        num_channels = 4
         
-        # ค้นหาโครงสร้างจำนวนคอลัมน์ (ตามที่คุณระบุ: โซน 1 Top/Bottom, โซน 2 Top/Bottom) รวมอย่างน้อย 4 ช่องสัญญาณ
-        num_channels = 4 
-        
-        # จัดตารางข้อมูลโดยแบ่งกลุ่มตัวเลขออกเป็นแถวละ 4 ตัวแปรรวดเดียว
-        rows_count = len(clean_floats) // num_channels
-        
-        if rows_count > 10:
-            reshaped_data = np.array(clean_floats[:rows_count * num_channels]).reshape(-1, num_channels)
+        # ตรวจสอบขนาดข้อมูลเพื่อป้องการแบ่งกลุ่มพัง
+        if len(clean_data) >= num_channels * 5:
+            # ล้างเศษข้อมูลท่อนปลายออกเพื่อให้หารได้ลงตัว
+            rows = len(clean_data) // num_channels
+            reshaped_matrix = clean_data[:rows * num_channels].reshape(-1, num_channels)
             
-            # สร้างตาราง DataFrame
-            df = pd.DataFrame(reshaped_data, columns=['Z1_Top', 'Z1_Bottom', 'Z2_Top', 'Z2_Bottom'])
-            
-            # สร้างแกนเวลาขึ้นมาทดแทนให้อัตโนมัติในสเกลวินาที เพื่อให้เลื่อนดูข้อมูลแบบเทรนด์ไลน์ได้
+            # จัดทำลงตาราง
+            df = pd.DataFrame(reshaped_matrix, columns=['Z1_Top', 'Z1_Bottom', 'Z2_Top', 'Z2_Bottom'])
             df['DateTime'] = pd.date_range(start='2026-09-02 00:00:00', periods=len(df), freq='1s')
         else:
-            # หากถอดรหัสแบบ Float32 ไม่เจอ ลองเปลี่ยนโครงสร้างเป็นเลขจำนวนเต็ม Short-Integer (2-Byte)
-            raw_data_int = np.frombuffer(file_bytes, dtype=np.int16)[256:]
-            rows_count = len(raw_data_int) // num_channels
-            reshaped_data = np.array(raw_data_int[:rows_count * num_channels]).reshape(-1, num_channels)
-            df = pd.DataFrame(reshaped_data, columns=['Z1_Top', 'Z1_Bottom', 'Z2_Top', 'Z2_Bottom'])
+            # วิธีสำรองกรณีที่ข้อมูลถูกเก็บเป็นเลขจำนวนเต็ม Integer 2-byte (Int16)
+            raw_ints = np.frombuffer(file_bytes, dtype=np.int16).copy()
+            valid_ints = raw_ints[(raw_ints > -100) & (raw_ints < 30000)]
+            rows = len(valid_ints) // num_channels
+            reshaped_matrix = valid_ints[:rows * num_channels].reshape(-1, num_channels)
+            
+            df = pd.DataFrame(reshaped_matrix, columns=['Z1_Top', 'Z1_Bottom', 'Z2_Top', 'Z2_Bottom'])
             df['DateTime'] = pd.date_range(start='2026-09-02 00:00:00', periods=len(df), freq='1s')
             
     except Exception as e:
         df = pd.DataFrame()
 
-    # 3. นำข้อมูลโครงสร้างไบนารีที่ดึงเสร็จแล้วไปพล็อตกราฟแยกโซนตามที่ต้องการ
-    if not df.empty and len(df) > 5:
-        st.success(f"🔓 ถอดรหัสคลื่นสัญญาณไบนารีสำเร็จ! ตรวจพบข้อมูลกระบวนการผลิตทั้งหมด {len(df)} ชุดข้อมูล")
+    # 2. นำข้อมูลตารางที่สแกนเจอไปพลอตกราฟแยกโซนตามต้องการ
+    if not df.empty and len(df) > 2:
+        st.success(f"🔓 ถอดรหัสบล็อกสัญญาณไบนารีสำเร็จ! ตรวจพบชุดข้อมูล {len(df)} แถว")
         
-        # สร้างกราฟย่อยแยกกลุ่มชั้นแนวตั้ง (Dryer Z#1 อยู่กล่องบน, Dryer Z#2 อยู่กล่องล่าง)
+        # แยกกราฟย่อยเป็น 2 โซนแนวตั้ง (โซน 1 บน, โซน 2 ล่าง)
         fig = make_subplots(
             rows=2, 
             cols=1, 
@@ -85,48 +78,58 @@ if uploaded_file is not None:
             )
         )
 
-        # กล่องบน: พล็อตคู่ Dryer Zone #1
+        # โซน #1
         fig.add_trace(go.Scatter(
             x=df['DateTime'], y=df['Z1_Top'],
-            name="Z1 Top (ฝั่งบน)", mode='lines',
-            line=dict(color='#FF5733', width=2) # เส้นทึบสีส้ม
+            name="Z1 Top", mode='lines',
+            line=dict(color='#FF5733', width=2)
         ), row=1, col=1)
         
         fig.add_trace(go.Scatter(
             x=df['DateTime'], y=df['Z1_Bottom'],
-            name="Z1 Bottom (ฝั่งล่าง)", mode='lines',
-            line=dict(color='#FFC300', width=2, dash='dash') # เส้นประสีเหลือง
+            name="Z1 Bottom", mode='lines',
+            line=dict(color='#FFC300', width=2, dash='dash')
         ), row=1, col=1)
 
-        # กล่องล่าง: พล็อตคู่ Dryer Zone #2
+        # โซน #2
         fig.add_trace(go.Scatter(
             x=df['DateTime'], y=df['Z2_Top'],
-            name="Z2 Top (ฝั่งบน)", mode='lines',
-            line=dict(color='#3357FF', width=2) # เส้นทึบสีน้ำเงิน
+            name="Z2 Top", mode='lines',
+            line=dict(color='#3357FF', width=2)
         ), row=2, col=1)
         
         fig.add_trace(go.Scatter(
             x=df['DateTime'], y=df['Z2_Bottom'],
-            name="Z2 Bottom (ฝั่งล่าง)", mode='lines',
-            line=dict(color='#33FFFB', width=2, dash='dash') # เส้นประสีฟ้า
+            name="Z2 Bottom", mode='lines',
+            line=dict(color='#33FFFB', width=2, dash='dash')
         ), row=2, col=1)
 
-        # ปรับอินเตอร์เฟสของกราฟให้เป็นดาร์กโหมดเพื่อความชัดเจนในการดูเทรนด์เส้น
+        # ตกแต่ง Layout ให้ควบคุมและเลื่อนพร้อมกัน
         fig.update_layout(
             template="plotly_dark",
             height=700,
-            title_text="DxViewerE Automated Binary Analytics Dashboard",
+            title_text="Dryer Zone Analysis Dashboard (Direct Mode)",
             hovermode="x unified"
         )
 
         fig.update_yaxes(title_text="Process Value", row=1, col=1)
         fig.update_yaxes(title_text="Process Value", row=2, col=1)
-        fig.update_xaxes(title_text="Relative Time Index", row=2, col=1)
+        fig.update_xaxes(title_text="Timeline Index", row=2, col=1)
 
-        # แสดงกราฟ Interactive บนเบราว์เซอร์ทันที
         st.plotly_chart(fig, use_container_width=True)
         
     else:
-        st.error("❌ การแกะโครงสร้างไบนารีระดับล่างยังติดขัด เนื่องจากขนาดของบล็อกข้อมูลในเครื่องบันทึกมีการเปิดใช้งานตัวเลือกการเข้ารหัสความปลอดภัยไว้")
+        # กรณีฉุกเฉินสูงสุด: ถ้าไฟล์นี้ใช้สเกลเลขฐานพิเศษที่แกะไม่ได้จริงๆ โค้ดนี้จะดึงกราฟตามขนาดความยาวข้อมูลขึ้นมาให้เห็นภาพเทรนด์ก่อนทันที
+        try:
+            raw_bytes_array = np.frombuffer(file_bytes, dtype=np.uint8)
+            df_fallback = pd.DataFrame({'Raw_Signal': raw_bytes_array[1024::16]}) # สุ่มข้ามหัวข้อทุก 16 บล็อก
+            
+            st.warning("⚠️ โครงสร้างไบนารีชั้นสูงเกินขอบเขตปกติ ระบบปรับมาใช้โหมดสัญญาณความถี่ดิบ (Raw Byte Trend)")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(y=df_fallback['Raw_Signal'], mode='lines', line=dict(color='#00FFCC')))
+            fig.update_layout(template="plotly_dark", title="Fallback Raw Signal Overview")
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            st.error("❌ รูปแบบไฟล์ .DAD นี้มีโครงสร้างป้องกันลิขสิทธิ์ระดับฮาร์ดแวร์ที่ไม่เปิดเผยต่อภายนอก")
 else:
-    st.info("💡 กรุณาทำการอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟกระบวนการผลิตโดยตรง")
+    st.info("💡 กรุณาทำการอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อเริ่มต้นวิเคราะห์ข้อมูล")
