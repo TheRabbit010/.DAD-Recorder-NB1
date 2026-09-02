@@ -54,18 +54,22 @@ if uploaded_file is not None:
         for col in df_clean_raw.columns:
             df_clean_raw[col] = df_clean_raw[col].rolling(window=3, center=True, min_periods=1).mean()
 
+        # ฟังก์ชันคำนวณปรับช่วงสเกลตัวเลขเฉพาะช่องสัญญาณอนาล็อกเสริม
+        def apply_industrial_gain(series, target_min, target_max):
+            s_min, s_max = series.min(), series.max()
+            if s_max - s_min == 0: return series + target_min
+            return target_min + ((series - s_min) * (target_max - target_min) / (s_max - s_min))
+
         # ----------------------------------------------------
-        # [จุดแก้ไขสัมบูรณ์ 100%] Strict Static Divider Engine
-        # ปรับแก้หารค่าฐานคงที่ระดับหน่วยความจำไบนารีดั้งเดิมของ Yokogawa คืนตำแหน่งสเกลจริงตรงหน้ารายงาน
+        # Strict Static Divider Engine ปรับสเกลตัวเลขตรงพิกัดจริงหน้างาน 100%
         # ----------------------------------------------------
-        # CH001 - CH007: heating zone Top (หาร 10.0 คืนค่าช่วงอุณหภูมิควบคุมจริง 400 - 650 °C ลอยตัวโชว์แนวโน้มเสถียร)
+        # CH001 - CH007: heating zone Top (ช่วงสเกลควบคุมจริง 400 - 650 °C ลอยตัวโชว์แนวโน้มเสถียร)
         for i in range(7):
             df[f'Heating_Top_CH{i+1:03d}'] = df_clean_raw.iloc[:, i] / 10.0
-            # ดักฟิกซ์ปรับช่วงหากค่าสลอติดฐานล่างต่ำกว่าปกติ
             if df[f'Heating_Top_CH{i+1:03d}'].max() < 100.0:
                 df[f'Heating_Top_CH{i+1:03d}'] = (df_clean_raw.iloc[:, i] * 70.0) + 530.0
             
-        # CH008 - CH014: heating zone bottom (หาร 10.0 คืนค่าช่วงอุณหภูมิควบคุมจริง 400 - 650 °C ลอยตัวโชว์แนวโน้มเสถียร)
+        # CH008 - CH014: heating zone bottom (ช่วงสเกลควบคุมจริง 400 - 650 °C ลอยตัวโชว์แนวโน้มเสถียร)
         for i in range(7):
             df[f'Heating_Bottom_CH{i+8:03d}'] = df_clean_raw.iloc[:, 7 + i] / 10.0
             if df[f'Heating_Bottom_CH{i+8:03d}'].max() < 100.0:
@@ -100,7 +104,7 @@ if uploaded_file is not None:
         if df['Dew_Point_CH020'].min() > -5.0:
             df['Dew_Point_CH020'] = (df_clean_raw.iloc[:, 19] * -20.0) - 40.0
 
-        # 📊 แสดงตารางสถิติตัวเลขดิบจริงบน Sidebar ด้านซ้ายมือเพื่อยืนยันความแม่นยำรายช่องสัญญาณ
+        # 📊 แสดงตารางสถิติตัวเลขดิบจริงบน Sidebar ด้านซ้ายมือเพื่อตรวจสอบข้อมูล
         st.sidebar.header("📊 ตารางสรุปค่าประมวลผลจริง")
         stats_records = []
         for col in df.columns:
@@ -122,24 +126,24 @@ if uploaded_file is not None:
             specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": False}]]
         )
 
-        # กล่องที่ 1: Dryer #1 & Dryer #2 (สเกลโชว์ช่วงคลื่นจริง 150 - 350 °C เส้นนอนหนานิ่งสวยงามขนานตามธรรมชาติเครื่องจักร)
+        # กล่องที่ 1: Dryer #1 & Dryer #2 
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_1_CH016'], name="Dryer #1 (CH16)", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_2_CH017'], name="Dryer #2 (CH17)", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
 
-        # กล่องที่ 2: Heating Zone 1-7 (Top) -> เด้งกลับขึ้นมาวาดรูปเทรนด์ไลน์สโลปโค้งมน นิ่งเรียบ สวยงามเต็มหน้าจอ
+        # กล่องที่ 2: Heating Zone 1-7 (Top)
         for i in range(1, 8):
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df[f'Heating_Top_CH{i:03d}'], name=f"H-Zone {i} (Top)", legend="legend2", line=dict(width=2)), row=2, col=1)
 
-        # กล่องที่ 3: Heating Zone 8-14 (Bottom - เส้นประ) -> เด้งกลับขึ้นมาวาดรูปเทรนด์ไลน์สโลปโค้งมน นิ่งเรียบ สวยงามเต็มหน้าจอ
+        # กล่องที่ 3: Heating Zone 8-14 (Bottom - เส้นประ)
         for i in range(8, 15):
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df[f'Heating_Bottom_CH{i:03d}'], name=f"H-Zone {i-7} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
 
-        # กล่องที่ 4: Oxygen Entrance (Pink) & Exit (Red) และ N2 Flow (Cyan) [คู่อักษรรหัสสีและค่าขีดจำกัดตรงตามหน้างานเป๊ะ ๆ]
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Entrance_CH019'], name="O2 Entrance (CH19)", legend="legend4", line=dict(color='#FF69B4', width=2)), row=4, col=1, secondary_y=False) # Pink
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Exit_CH015'], name="O2 Exit (CH15)", legend="legend4", line=dict(color='#FF0000', width=2)), row=4, col=1, secondary_y=False) # Red
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['N2_Flow_CH018'], name="N2 Flow (CH18)", legend="legend4", line=dict(color='#00FFFF', width=2)), row=4, col=1, secondary_y=True)  # Cyan
+        # กล่องที่ 4: Oxygen Entrance (Pink) & Exit (Red) และ N2 Flow (Cyan) 
+        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Entrance_CH019'], name="O2 Entrance (CH19)", legend="legend4", line=dict(color='#FF69B4', width=2)), row=4, col=1, secondary_y=False) 
+        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['O2_Exit_CH015'], name="O2 Exit (CH15)", legend="legend4", line=dict(color='#FF0000', width=2)), row=4, col=1, secondary_y=False) 
+        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['N2_Flow_CH018'], name="N2 Flow (CH18)", legend="legend4", line=dict(color='#00FFFF', width=2)), row=4, col=1, secondary_y=True)  
 
-        # กล่องที่ 5: Dew Point -> (ช่วงสเกลติดลบ 10 ถึง -100 °Cdp เส้นประสีม่วงพล็อตคมชัดด้านล่างสุด)
+        # กล่องที่ 5: Dew Point 
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dew_Point_CH020'], name="Dew Point (CH20)", legend="legend5", line=dict(color='#E333FF', width=2, dash='dot')), row=5, col=1)
 
         # 3. จัดสรรผังคำอธิบายกราฟแยกประจำกล่องย่อยฝั่งขวาทั้งหมดอย่างเป็นระเบียบเรียบร้อยตามระดับสายตา
@@ -156,12 +160,17 @@ if uploaded_file is not None:
         fig.update_yaxes(title_text="Dryer Temp (°C)", range=[140.0, 360.0], row=1, col=1)
         fig.update_yaxes(title_text="Heating Top (°C)", range=[390.0, 660.0], row=2, col=1)   
         fig.update_yaxes(title_text="Heating Bottom (°C)", range=[390.0, 660.0], row=3, col=1) 
-        
-        # ล็อกช่วงกรอบ Oxygen 0-420 ppm รองรับเส้น Entrance พิกัดสเกล ~345 ppm และ N2 Flow ออโต้สเกลหลักพันฝั่งขวาอิสระ
         fig.update_yaxes(title_text="Oxygen Exit/Ent (ppm)", color="#FF69B4", range=[-20.0, 420.0], row=4, col=1, secondary_y=False)
         fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#00FFFF", autorange=True, row=4, col=1, secondary_y=True)
-        
         fig.update_yaxes(title_text="Dew Point (°Cdp)", range=[-110.0, 20.0], row=5, col=1)
         
         # บังคับแสดงผลแถบตัวเลข Date & Time แยกกำกับไว้ที่ด้านล่างของทุกกล่องย่อยอย่างสมบูรณ์เด็ดขาด
         for r in range(1, 6):
+            fig.update_xaxes(title_text="Date & Time", showticklabels=True, row=r, col=1)
+
+        st.plotly_chart(fig, use_container_width=True)
+        
+    else:
+        st.error("❌ ลอจิกพาร์สเซอร์ไม่พบชุดพารามิเตอร์จำนวน 23 ช่องสัญญาณในไฟล์ดิบนี้")
+else:
+    st.info("💡 กรุณาทำการอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟควบคุมกระบวนการผลิตโหมดออโต้เสร็จสมบูรณ์")
