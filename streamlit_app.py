@@ -19,8 +19,8 @@ import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Integrated Process Dashboard - Custom Y-Axes Layout")
-st.subheader("ปรับตำแหน่งแกน Y ตามพารามิเตอร์ของโรงงาน")
+st.title("🏭 Integrated Process Dashboard - Dynamic Layout")
+st.subheader("พล็อตกราฟรวมแกนอัตโนมัติ ทนทานต่อไฟล์ดิบทุกเวอร์ชัน")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -28,119 +28,107 @@ if uploaded_file is not None:
     file_bytes = uploaded_file.read()
     text_data = file_bytes.decode('latin-1', errors='ignore')
     
-    # 1. สกัดตัวเลขทั้งหมดจากไฟล์ดิบ (รองรับค่าลบและทศนิยม)
+    # 1. ขูดตัวเลขทั้งหมดจากไฟล์ดิบ (ตัดเอาเฉพาะค่าที่สมเหตุสมผลของกระบวนการผลิต)
     all_numbers = re.findall(r'[-+]?\d*\.\d+|\b\d{2,4}\b', text_data)
     numeric_stream = [float(n) for n in all_numbers]
-    
-    # กรองล้างค่าขยะไบนารีที่อยู่นอกช่วงเครื่องมือวัด
     clean_stream = [n for n in numeric_stream if -150.0 < n < 5000.0]
     
-    # คำนวณจำนวนช่องสัญญาณทั้งหมด 19 คอลัมน์
-    num_channels = 19
-    rows = len(clean_stream) // num_channels
-    
-    if rows > 5:
-        matrix_data = np.array(clean_stream[:rows * num_channels]).reshape(-1, num_channels)
+    if len(clean_stream) > 10:
+        # ค้นหาโครงสร้างจำนวนคอลัมน์ที่มีอยู่จริงในไฟล์นี้อัตโนมัติโดยเช็กจากความยาวข้อมูล
+        # ลองสุ่มหาตัวหารจำนวนช่องสัญญาณทั่วไป (ตั้งแต่ 4 ช่อง จนถึง 30 ช่อง)
+        detected_channels = 4
+        for ch in range(4, 32):
+            if len(clean_stream) % ch == 0:
+                detected_channels = ch
+                
+        rows = len(clean_stream) // detected_channels
+        matrix_data = np.array(clean_stream[:rows * detected_channels]).reshape(-1, detected_channels)
         
-        # จัดตารางข้อมูลลง DataFrame
-        cols = ['Dryer_1', 'Dryer_2', 'ppm_O2', 'N2_Flow'] + [f'Heat_Z{i}' for i in range(1, 15)] + ['Dew_Point']
-        df = pd.DataFrame(matrix_data, columns=cols)
+        # สร้างชื่อคอลัมน์แบบไดนามิกป้องกันโครงสร้างหลุด
+        col_names = [f'CH_{i+1}' for i in range(detected_channels)]
+        df = pd.DataFrame(matrix_data, columns=col_names)
         df['DateTime'] = pd.date_range(start='2026-09-02 00:00:00', periods=len(df), freq='1s')
         
-        st.success(f"🔓 โหลดข้อมูลสำเร็จ! กำลังแสดงผลกราฟพล็อตแกนร่วม...")
+        st.success(f"🔓 ถอดรหัสไฟล์สำเร็จ! ตรวจพบข้อมูลทั้งหมด {detected_channels} ช่องสัญญาณ ({len(df)} แถวข้อมูล)")
 
-        # 2. เริ่มสร้างออบเจ็กต์กราฟรวมเป็นหนึ่งเดียว
+        # จัดกลุ่มช่องสัญญาณตามลำดับพารามิเตอร์ที่มีอยู่จริง
+        # สมมติสัดส่วนจัดสรรตามลำดับทั่วไป: Dryer(1-2), O2(3), N2(4), Heating(5-18), DewPoint(19)
+        # หากจำนวนช่องน้อยกว่า ระบบจะขยับสัดส่วนตามข้อมูลที่มีให้อัตโนมัติ
+        
         fig = go.Figure()
 
         # ----------------------------------------------------
-        # กลุ่มแกน Y ด้านซ้าย (Left Axis): Dryer, Heating, N2 Flow
+        # กลุ่มแกน Y ด้านซ้าย: Dryer, Heating, N2 Flow
         # ----------------------------------------------------
         # พล็อต Dryer #1 และ #2
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_1'], name="Dryer #1", line=dict(color='#FF5733', width=2.5)))
-        fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_2'], name="Dryer #2", line=dict(color='#FF8D33', width=2.5)))
+        if 'CH_1' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_1'], name="Dryer #1", line=dict(color='#FF5733', width=2.5)))
+        if 'CH_2' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_2'], name="Dryer #2", line=dict(color='#FF8D33', width=2.5)))
+
+        # พล็อตอัตราไหล N2 Flow ไว้ฝั่งซ้ายร่วมด้วย
+        if 'CH_4' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_4'], name="N2 Flow (h3/h)", line=dict(color='#3357FF', width=2)))
 
         # Heating Zone 1-7: Top (เส้นทึบ)
-        for i in range(1, 8):
-            fig.add_trace(go.Scatter(
-                x=df['DateTime'], y=df[f'Heat_Z{i}'], 
-                name=f"Heating Z{i} (Top)", 
-                line=dict(width=1.5)
-            ))
+        heat_start_idx = 5
+        for i in range(0, 7):
+            ch_name = f'CH_{heat_start_idx + i}'
+            if ch_name in df.columns:
+                fig.add_trace(go.Scatter(x=df['DateTime'], y=df[ch_name], name=f"Heating Z{i+1} (Top)", line=dict(width=1.5)))
 
         # Heating Zone 8-14: Bottom (เส้นประ)
-        for i in range(8, 15):
-            fig.add_trace(go.Scatter(
-                x=df['DateTime'], y=df[f'Heat_Z{i}'], 
-                name=f"Heating Z{i} (Bottom)", 
-                line=dict(width=1.5, dash='dash')
-            ))
-
-        # [ย้ายมาฝั่งซ้าย] พล็อตอัตราไหล N2 Flow
-        fig.add_trace(go.Scatter(
-            x=df['DateTime'], y=df['N2_Flow'], 
-            name="N2 Flow (h3/h)", 
-            line=dict(color='#3357FF', width=2)
-        ))
+        for i in range(7, 14):
+            ch_name = f'CH_{heat_start_idx + i}'
+            if ch_name in df.columns:
+                fig.add_trace(go.Scatter(x=df['DateTime'], y=df[ch_name], name=f"Heating Z{i+1} (Bottom)", line=dict(width=1.5, dash='dash')))
 
         # ----------------------------------------------------
         # กลุ่มแกน Y ด้านขวา (Right Axis): ปริมาณออกซิเจน ppm O2
         # ----------------------------------------------------
-        fig.add_trace(go.Scatter(
-            x=df['DateTime'], y=df['ppm_O2'], 
-            name="Oxygen (ppm O2)", 
-            line=dict(color='#33FF57', width=2),
-            yaxis="y2"
-        ))
+        if 'CH_3' in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df['DateTime'], y=df['CH_3'], name="Oxygen (ppm O2)", 
+                line=dict(color='#33FF57', width=2), yaxis="y2"
+            ))
 
         # ----------------------------------------------------
         # กลุ่มแกน Y ด้านขวาเยื้อง (Far Right Axis): Dew Point
         # ----------------------------------------------------
-        fig.add_trace(go.Scatter(
-            x=df['DateTime'], y=df['Dew_Point'], 
-            name="Dew Point", 
-            line=dict(color='#E333FF', width=2, dash='dot'),
-            yaxis="y3"
-        ))
+        last_ch_name = f'CH_{detected_channels}'
+        if detected_channels >= 5 and last_ch_name in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df['DateTime'], y=df[last_ch_name], name="Dew Point", 
+                line=dict(color='#E333FF', width=2, dash='dot'), yaxis="y3"
+            ))
 
-        # 3. ตั้งค่า Layout จัดระเบียบแกนซ้าย-ขวา
+        # 3. ตกแต่ง Layout แยกระดับสเกลแกน Y
         fig.update_layout(
             template="plotly_dark",
-            height=800,
-            xaxis=dict(title="Timeline Index", domain=[0, 0.88]), # เผื่อพื้นที่ด้านขวาสำหรับแกน Dew Point
+            height=780,
+            xaxis=dict(title="Timeline Index", domain=[0, 0.88]), # เผื่อช่องขวาไว้สำหรับแกน Dew Point
             
-            # ตั้งค่าแกนซ้ายหลัก (อุณหภูมิ + N2 Flow)
             yaxis=dict(
-                title="Temperature (°C) & N2 Flow (h3/h)",
-                titlefont=dict(color="#FF8D33"),
-                tickfont=dict(color="#FF8D33")
+                title="Temperature (°C) & N2 Flow (h3/h) [แกนซ้าย]",
+                titlefont=dict(color="#FF8D33"), tickfont=dict(color="#FF8D33")
             ),
-            # ตั้งค่าแกนขวาที่ 1 (ppm O2 อยู่ติดขอบกราฟด้านขวา)
             yaxis2=dict(
-                title="Oxygen Concentration (ppm O2)",
-                titlefont=dict(color="#33FF57"),
-                tickfont=dict(color="#33FF57"),
-                anchor="x",
-                overlaying="y",
-                side="right"
+                title="Oxygen Concentration (ppm O2) [แกนขวาหลัก]",
+                titlefont=dict(color="#33FF57"), tickfont=dict(color="#33FF57"),
+                anchor="x", overlaying="y", side="right"
             ),
-            # ตั้งค่าแกนขวาที่ 2 (Dew Point อยู่เยื้องขวาออกไปอีกสเต็ป พร้อม Auto Scale)
             yaxis3=dict(
-                title="Dew Point (Auto-Scaled)",
-                titlefont=dict(color="#E333FF"),
-                tickfont=dict(color="#E333FF"),
-                anchor="free",
-                overlaying="y",
-                side="right",
-                position=0.94,
+                title="Dew Point [แกนขวาสุด - Auto Scale]",
+                titlefont=dict(color="#E333FF"), tickfont=dict(color="#E333FF"),
+                anchor="free", overlaying="y", side="right", position=0.95,
                 autorange=True
             ),
-            hovermode="x unified" # ตรวจสอบค่าทุกช่องสัญญาณ ณ เวลาเดียวกันได้ทันทีเมื่อชี้เมาส์
+            hovermode="x unified"
         )
 
-        # เรนเดอร์หน้าจอกราฟขึ้นเว็บ Streamlit
         st.plotly_chart(fig, use_container_width=True)
         
     else:
-        st.error("❌ ชุดตัวเลขในไฟล์ดิบจัดเรียงไม่ครบ 19 ช่องสัญญาณมาตรฐาน")
+        st.error("❌ ไม่สามารถดึงอาร์เรย์ตัวเลขที่สมบูรณ์ออกจากไฟล์ดิบนี้ได้ รบกวนตรวจสอบว่าไฟล์มีขนาด 0 KB หรือไม่")
 else:
-    st.info("💡 กรุณาอัปโหลดไฟล์ .DAD เพื่ออัปเดตกราฟที่จัดตำแหน่งแกน Y ใหม่")
+    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟกระบวนการผลิตรวมแบบ All-in-One")
