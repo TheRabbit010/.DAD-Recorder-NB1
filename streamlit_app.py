@@ -1,47 +1,63 @@
+import subprocess
+import sys
+
+# ตรวจสอบและติดตั้ง library อัตโนมัติหากยังไม่มีในระบบ
+def install_package(package_name):
+    try:
+        __import__(package_name)
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
+
+# ตรวจสอบตัวที่จำเป็น
+install_package("pandas")
+install_package("plotly")
+install_package("openpyxl")
+
+import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
-# 1. โหลดข้อมูลจากไฟล์ .DAD (แก้ชื่อไฟล์ให้ตรงกับของคุณ)
-file_path = 'data_file.dad'
+st.title("📊 DAD File Interactive Graph Viewer")
 
-try:
-    # กรณีที่ 1: ข้อมูลคั่นด้วยช่องว่างหรือ Tab (พบบ่อยที่สุดในไฟล์ประเภทนี้)
-    df = pd.read_csv(file_path, sep=r'\s+', engine='python')
-except Exception as e:
-    # กรณีที่ 2: ถ้าเกิดข้อผิดพลาด ลองโหลดแบบคั่นด้วยเครื่องหมายจุลภาค (Comma)
-    df = pd.read_csv(file_path)
+# 1. กล่องอัปโหลดไฟล์ผ่านหน้าเว็บ Streamlit
+uploaded_file = st.file_uploader("อัปโหลดไฟล์ .DAD หรือ .DAT ของคุณที่นี่", type=["dad", "dat"])
 
-# แสดงหน้าตาข้อมูล 5 แถวแรกเพื่อตรวจสอบชื่อคอลัมน์ใน Terminal
-print("--- ตรวจสอบข้อมูล 5 แถวแรก ---")
-print(df.head())
-print("-----------------------------\n")
-
-# 2. ตรวจสอบและเลือกชื่อคอลัมน์มาพล็อต
-# ตัวอย่าง: สมมติว่ามีคอลัมน์ชื่อ 'Time' และ 'Value' (ให้เปลี่ยนเป็นชื่อคอลัมน์จริงของคุณ)
-x_column = df.columns[0] # เลือกคอลัมน์แรกเป็นแกน X
-y_column = df.columns[1] # เลือกคอลัมน์ที่สองเป็นแกน Y
-
-print(f"กำลังพล็อตกราฟโดยใช้แกน X: {x_column} และแกน Y: {y_column}")
-
-# 3. สร้าง Interactive Graph ด้วย Plotly
-fig = px.line(
-    df, 
-    x=x_column, 
-    y=y_column, 
-    title=f"Interactive Graph จากไฟล์ .DAD ({y_column} vs {x_column})",
-    template="plotly_dark"  # มีธีมให้เลือก เช่น 'plotly', 'plotly_white', 'plotly_dark'
-)
-
-# ปรับแต่งเพิ่มเติมให้กราฟดูง่ายขึ้น (ซูมเฉพาะจุด, แสดงแถบเครื่องมือ)
-fig.update_layout(
-    hovermode="x unified", # แสดงค่าแกน X และ Y พร้อมกันเมื่อเอาเมาส์ไปชี้
-    xaxis_title=x_column,
-    yaxis_title=y_column
-)
-
-# 4. เปิดแสดงผลกราฟบนเว็บเบราว์เซอร์อัตโนมัติ
-fig.show()
-
-# (ตัวเลือกเสริม) บันทึกกราฟเก็บไว้เป็นไฟล์ HTML เพื่อส่งต่อให้คนอื่นเปิดดูแบบ Interactive ได้
-# fig.write_html("interactive_chart.html")
+if uploaded_file is not None:
+    try:
+        # ลองโหลดข้อมูลแบบคั่นด้วยช่องว่าง (Space/Tab)
+        df = pd.read_csv(uploaded_file, sep=r'\s+', engine='python')
+    except Exception:
+        # ถ้าพัง ลองโหลดแบบคั่นด้วย Comma
+        uploaded_file.seek(0)
+        df = pd.read_csv(uploaded_file)
+        
+    st.success("โหลดข้อมูลสำเร็จ!")
+    
+    # แสดงตัวอย่างข้อมูล
+    with st.expander("🔍 ดูตัวอย่างข้อมูลในไฟล์ (5 แถวแรก)"):
+        st.write(df.head())
+        
+    # 2. ให้ผู้ใช้เลือกคอลัมน์แกน X และ Y จากหน้าเว็บได้เอง
+    columns = df.columns.tolist()
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        x_axis = st.selectbox("เลือกคอลัมน์สำหรับแกน X", options=columns, index=0)
+    with col2:
+        y_axis = st.selectbox("เลือกคอลัมน์สำหรับแกน Y", options=columns, index=min(1, len(columns)-1))
+        
+    # 3. สร้างและแสดงผล Interactive Graph
+    fig = px.line(
+        df, 
+        x=x_axis, 
+        y=y_axis, 
+        title=f"กราฟความสัมพันธ์ระหว่าง {y_axis} และ {x_axis}",
+        template="plotly_dark"
+    )
+    
+    fig.update_layout(hovermode="x unified")
+    
+    # แสดงกราฟบน Streamlit
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("💡 กรุณาอัปโหลดไฟล์ .DAD เพื่อเริ่มต้นพล็อตกราฟ")
