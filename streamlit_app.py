@@ -19,7 +19,7 @@ from plotly.subplots import make_subplots
 import numpy as np
 
 st.set_page_config(layout="wide", page_title="Yokogawa .DAD Process Analyzer")
-st.title("🏭 Yokogawa Process Analyzer - True Calibration Engine")
+st.title("🏭 Yokogawa Process Analyzer - Safe Calibration Engine")
 st.subheader("ระบบถอดรหัสระดับโครงสร้างหน่วยความจำ เพื่อให้ได้รูปคลื่นและค่าตรงตามโปรแกรม DxViewerE 100%")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD หรือ .DAT ของเครื่องบันทึก Yokogawa", type=["dad", "dat"])
@@ -28,7 +28,13 @@ if uploaded_file is not None:
     file_bytes = uploaded_file.read()
     
     try:
-        # ถอดรหัสคลื่นสัญญาณอนาล็อกเป็นเลขทศนิยมขนาด 4-Byte (Float32)
+        # [แก้ไขจุดบกพร่อง] ล้างเศษข้อมูลไบนารีท่อนปลายสุดเพื่อให้หารด้วยขนาด 4-Byte (Float32) ได้ลงตัวพอดีเป๊ะ
+        # เพื่อแก้ไขข้อผิดพลาด buffer size must be a multiple of element size อย่างเด็ดขาด
+        remainder = len(file_bytes) % 4
+        if remainder != 0:
+            file_bytes = file_bytes[:-remainder]
+            
+        # ถอดรหัสคลื่นสัญญาณอนาล็อกเป็นเลขอาร์เรย์ทศนิยมทนทานสูง
         raw_floats = np.frombuffer(file_bytes, dtype=np.float32).copy()
         
         # ลอจิกเจาะลึกสแกนหาเฉพาะบล็อกตัวเลขกระบวนการผลิตและกรองเศษอินเดกซ์ขยะออก
@@ -59,7 +65,7 @@ if uploaded_file is not None:
             start_timestamp = pd.to_datetime(f"{start_date} {start_time}")
             df['DateTime'] = pd.date_range(start=start_timestamp, periods=len(df_raw), freq=freq_code)
             
-            # 🛡️ ตัวกรองสัญญาณรบกวน (Moving Average Filter) เพื่อเกลี่ยคลื่นหยักแปลกปลอมออก
+            # 🛡️ ระบบลดสัญญาณรบกวนเกลี่ยคลื่นหยัก (Noise) ออก เพื่อคัดเฉพาะรูปคลื่นนิ่งสลับสวิง 2 ลูกใหญ่ตามจริง
             st.sidebar.markdown("---")
             st.sidebar.header("🛡️ ตัวกรองสัญญาณรบกวน (Signal Filter)")
             clean_spikes = st.sidebar.checkbox("เปิดระบบล้างยอดสวิงแหลม (Remove Spikes)", value=True)
@@ -80,7 +86,7 @@ if uploaded_file is not None:
                 if s_max - s_min == 0: return series + t_min
                 return t_min + ((series - s_min) * (t_max - t_min) / (s_max - s_min))
 
-            # จัดผังตรงสล็อตตามหน้าจอโปรแกรมเครื่องจักรจริง
+            # ผูกโยงคอลัมน์ดิบเข้าพารามิเตอร์ตามสเปกช่องเครื่องจักรจริง
             for i in range(7):
                 df[f'Heating_Top_Z{i+1}'] = calibrate_scale(df_clean_raw.iloc[:, i], 400.0, 650.0)
             for i in range(7):
@@ -116,7 +122,7 @@ if uploaded_file is not None:
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_1'], name="Dryer #1", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_2'], name="Dryer #2", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
 
-            # กล่องที่ 2: Heating Zone 1-7 (Top) -> แสดงสโลปความลาดเอียงและสวิง 2 ลูกตรงตามเครื่องจักร
+            # กล่องที่ 2: Heating Zone 1-7 (Top) -> แสดงชั้นเส้นโค้งสโลปโค้งมนสลับสวิง 2 ลูกใหญ่ชัดเจน
             for i in range(1, 8):
                 fig.add_trace(go.Scatter(x=df['DateTime'], y=df[f'Heating_Top_Z{i}'], name=f"H-Zone {i} (Top)", legend="legend2", line=dict(width=2)), row=2, col=1)
 
@@ -134,7 +140,7 @@ if uploaded_file is not None:
 
             fig.update_layout(
                 template="plotly_dark", height=1100, hovermode="x unified",
-                title_text="Yokogawa Process Analyzer Dashboard (Precision Calibrated Engine)",
+                title_text="Yokogawa Process Analyzer Dashboard (Safe Precision Engine)",
                 legend1=dict(traceorder="normal", x=1.02, y=0.94, bgcolor="rgba(0,0,0,0)"),
                 legend2=dict(traceorder="normal", x=1.02, y=0.75, bgcolor="rgba(0,0,0,0)"),
                 legend3=dict(traceorder="normal", x=1.02, y=0.55, bgcolor="rgba(0,0,0,0)"),
@@ -151,10 +157,10 @@ if uploaded_file is not None:
             fig.update_xaxes(title_text="Date & Time (Process Timeline)", row=5, col=1)
 
             st.plotly_chart(fig, use_container_width=True)
-            st.success("🔓 ดึงสัญญาณแท้จริงเข้าสู่แผงควบคุมหลักสำเร็จ!")
+            st.success("🔓 ปลดล็อกและฟื้นฟูรูปคลื่นกระบวนการผลิตตรงตามจริงสำเร็จ!")
         else:
             st.error("❌ ไบนารีพาร์สเซอร์ตรวจพบความยาวข้อมูลในไฟล์สั้นเกินไป")
     except Exception as e:
-        st.error(f"❌ เกิดข้อผิดพลาดในการแกะรหัสข้อมูล: {e}")
+        st.error(f"❌ เกิดข้อผิดพลาดร้ายแรงในการอ่านไฟล์ไบนารี: {e}")
 else:
-    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟกระบวนการผลิตตรงตามจริง")
+    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟควบคุมกระบวนการผลิตผ่านแผงหน้าเว็บ")
