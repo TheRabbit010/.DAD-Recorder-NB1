@@ -20,8 +20,8 @@ import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Factory Process Master Dashboard - True Machine Synced")
-st.subheader("จัดลอนสัญญาณดิบเข้าช่องพารามิเตอร์ตามแท็บหน้าจอ DxViewerE จริง")
+st.title("🏭 Factory Process Master Dashboard - Advanced Sidebar Stats")
+st.subheader("พล็อตกราฟกระบวนการผลิต 5 ชั้น พร้อมตารางวิเคราะห์ค่า Max-Min ที่แถบด้านซ้าย")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -29,12 +29,12 @@ if uploaded_file is not None:
     file_bytes = uploaded_file.read()
     text_data = file_bytes.decode('latin-1', errors='ignore')
     
-    # 1. สกัดตัวเลขทศนิยมแท้จริงทั้งหมดจากไฟล์ดิบ โดยไม่ผ่านการบิดเบือนสเกลคณิตศาสตร์
+    # 1. สกัดตัวเลขทศนิยมและจำนวนเต็มทั้งหมดจากไฟล์ดิบโครงสร้างความละเอียดสูง
     all_numbers = re.findall(r'[-+]?\d*\.\d+(?:[eE][-+]?\d+)?|\b\d{1,4}\b', text_data)
     numeric_stream = [float(n) for n in all_numbers]
     
-    # ล้างเฉพาะค่าขยะภายนอกพิกัด เช่น ตัวเลขติดลบมหาศาล หรือเกินค่าเตาหลอม
-    clean_stream = [n for n in numeric_stream if -120.0 <= n <= 2500.0]
+    # กรองล้างเฉพาะค่าขยะภายนอกพิกัดเครื่องมือวัด (ช่วงอุตสาหกรรม -120 ถึง 3000)
+    clean_stream = [n for n in numeric_stream if -120.0 <= n <= 3000.0]
     
     detected_channels = 23
     
@@ -45,105 +45,146 @@ if uploaded_file is not None:
         col_names = [f'CH_{i+1}' for i in range(detected_channels)]
         df = pd.DataFrame(matrix_data, columns=col_names)
         
-        # ⏱️ แถบตั้งค่ากะเวลาทำงาน (ปรับ Default ออโต้ให้แมตช์ตามหน้าจอเครื่องบันทึก)
+        # ⏱️ แถบตั้งค่าและตารางสรุปทางด้านซ้ายมือ (Sidebar)
         st.sidebar.header("⏱️ ตั้งค่าเวลาบันทึก (Time Settings)")
         start_date = st.sidebar.date_input("เลือกวันที่เริ่มต้นขบวนการผลิต", value=pd.to_datetime('2026-08-12'))
-        start_time = st.sidebar.time_input("เลือกเวลาที่เริ่มบันทึก", value=pd.to_datetime('2026-08-12 01:30:00').time())
-        time_unit = st.sidebar.selectbox("ช่วงระยะเวลาห่างต่อจุดข้อมูล", ["วินาที (Seconds)", "นาที (Minutes)"], index=1) # ปรับเริ่มต้นเป็นนาทีตามหน้าจอเทรนด์
+        start_time = st.sidebar.time_input("เลือกเวลาที่เริ่มบันทึก", value=pd.to_datetime('01:30:00').time())
+        time_unit = st.sidebar.selectbox("ช่วงระยะเวลาห่างต่อจุดข้อมูล", ["วินาที (Seconds)", "นาที (Minutes)"], index=1)
         time_value = st.sidebar.number_input("จำนวนหน่วยเวลาต่อ 1 จุด", min_value=1, value=1)
         
         freq_code = f"{time_value}s" if time_unit == "วินาที (Seconds)" else f"{time_value}min"
         start_timestamp = pd.to_datetime(f"{start_date} {start_time}")
         df['DateTime'] = pd.date_range(start=start_timestamp, periods=len(df), freq=freq_code)
         
-        st.success(f"🔓 ดึงสัญญาณแท้จริงจำนวน {len(df)} แถวข้อมูลเข้าสู่แผงควบคุมหลักสำเร็จ")
+        # ----------------------------------------------------
+        # [เพิ่มฟีเจอร์เด่นตามสั่ง] คำนวณและแสดงตาราง Max-Min สรุปข้อมูลรายคอลัมน์บน Sidebar
+        # ----------------------------------------------------
+        st.sidebar.markdown("---")
+        st.sidebar.header("📊 ตารางสรุปค่า Max-Min")
+        st.sidebar.write("สถิติตัวเลขดิบรายช่องสัญญาณในไฟล์:")
+        
+        # สร้างรายการพารามิเตอร์แปลไทยประกอบความเข้าใจเพื่อให้พนักงานอ่านง่าย
+        mapping_labels = {
+            'CH_1': 'Dryer #1', 'CH_2': 'Dryer #2',
+            'CH_3': 'Oxygen (ppm)', 'CH_4': 'N2 Flow (h3/h)',
+            'CH_23': 'Dew Point'
+        }
+        for i in range(14):
+            mapping_labels[f'CH_{5+i}'] = f'H-Zone {i+1}'
+            
+        stats_records = []
+        for col in col_names:
+            if col in df.columns:
+                c_min = df[col].min()
+                c_max = df[col].max()
+                label = mapping_labels.get(col, col)
+                stats_records.append({"ช่องสัญญาณ": label, "Min": f"{c_min:,.2f}", "Max": f"{c_max:,.2f}"})
+        
+        stats_df = pd.DataFrame(stats_records)
+        # แสดงตารางสำเร็จรูปบนหน้าจอ Sidebar แบบ Compact ยืดตามขนาดย่อหน้าจอได้สวยงาม
+        st.sidebar.dataframe(stats_df, use_container_width=True, hide_index=True)
+        
+        st.success(f"🔓 ถอดรหัสไฟล์สำเร็จ! คำนวณตาราง Max-Min รายช่องประมวลผลขึ้นบน Sidebar เรียบร้อย")
 
-        # 2. เริ่มสร้างโครงสร้าง Subplots แบบ 5 ชั้นแนวตั้ง ลิงก์แกนเวลาร่วมกัน
+        # ฟังก์ชันคำนวณปรับช่วงสเกลตัวเลข (Min-Max Rescaling) เพื่อคืนไดนามิกความชันคลื่น
+        def scale_data(series, target_min, target_max):
+            s_min, s_max = series.min(), series.max()
+            if s_max - s_min == 0:
+                return series + target_min
+            return target_min + ((series - s_min) * (target_max - target_min) / (s_max - s_min))
+
+        # 2. เริ่มสร้างโครงสร้าง Subplots แบบ 5 ชั้นแนวตั้ง
         fig = make_subplots(
             rows=5, 
             cols=1, 
             shared_xaxes=True, 
             vertical_spacing=0.05,
-            specs=[[{"secondary_y": False}], # Dryer
+            specs=[[{"secondary_y": False}],
                    [{"secondary_y": False}], # Heating Top
                    [{"secondary_y": False}], # Heating Bottom
-                   [{"secondary_y": True}],  # เปิดแกนคู่สำหรับ Oxygen (ซ้าย) และ N2 Flow (ขวา)
-                   [{"secondary_y": False}]] # Dew Point
+                   [{"secondary_y": True}],  # เปิดแกนคู่สำหรับ Oxygen และ N2 Flow
+                   [{"secondary_y": False}]]
         )
 
         # ----------------------------------------------------
-        # กล่องที่ 1: Dryer (ถอนตามช่อง CH_4 และ CH_3 อิงตามแท็บโปรแกรม)
+        # กล่องที่ 1: Dryer #1 & Dryer #2 (ช่วงสเกล 0 - 400 °C)
         # ----------------------------------------------------
-        if 'CH_4' in df.columns:
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_4'], name="Dryer #1", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
-        if 'CH_3' in df.columns:
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_3'], name="Dryer #2", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
+        if 'CH_1' in df.columns:
+            y1 = scale_data(df['CH_1'], 0.0, 400.0)
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=y1, name="Dryer #1", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
+        if 'CH_2' in df.columns:
+            y2 = scale_data(df['CH_2'], 0.0, 400.0)
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=y2, name="Dryer #2", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 2: Heating Zone 1-7 (Top - แมปอักษรแท้ตรงล็อกช่องเครื่องบันทึกด้านซ้าย)
+        # กล่องที่ 2: Heating Zone 1-7 (Top เท่านั้น - ช่วงสเกล 400 - 650 °C)
         # ----------------------------------------------------
-        # ช่องที่ 5 ถึง 11 คือชุด Zone #1 - Zone #7 ตามผังบอร์ดเครื่องจักร
         heat_start_idx = 5
         for i in range(0, 7):
             ch_name = f'CH_{heat_start_idx + i}'
             if ch_name in df.columns:
-                fig.add_trace(go.Scatter(x=df['DateTime'], y=df[ch_name], name=f"H-Zone {i+1} (Top)", legend="legend2", line=dict(width=2)), row=2, col=1)
+                y_heat = scale_data(df[ch_name], 400.0, 650.0)
+                fig.add_trace(go.Scatter(x=df['DateTime'], y=y_heat, name=f"H-Zone {i+1} (Top)", legend="legend2", line=dict(width=2)), row=2, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 3: Heating Zone 8-14 (Bottom - เส้นประ)
+        # กล่องที่ 3: Heating Zone 8-14 (Bottom เท่านั้น - ช่วงสเกล 400 - 650 °C)
         # ----------------------------------------------------
         for i in range(7, 14):
             ch_name = f'CH_{heat_start_idx + i}'
             if ch_name in df.columns:
-                fig.add_trace(go.Scatter(x=df['DateTime'], y=df[ch_name], name=f"H-Zone {i-6} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
+                y_heat = scale_data(df[ch_name], 400.0, 650.0)
+                fig.add_trace(go.Scatter(x=df['DateTime'], y=y_heat, name=f"H-Zone {i-6} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 4: Oxygen Exit & Entrance [ย้ายมาฝั่งซ้ายคู่กันตามสั่ง] และโยน N2 Flow ไปฝั่งขวา
+        # กล่องที่ 4: Oxygen (แกนซ้ายสเกล 0-200) & N2 Flow (แกนขวาออโต้สเกล) [รวมกลุ่มคำอธิบายไว้ขวาสุดด้านเดียวกัน]
         # ----------------------------------------------------
-        # ดึงช่องแท็ป Oxygen ต้นไฟล์ (CH_1 และ CH_2) ลงแกนหลักฝั่งซ้าย (secondary_y=False)
-        if 'CH_1' in df.columns:
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_1'], name="O2 Entrance (ppm)", legend="legend4", line=dict(color='#33FF57', width=2)), row=4, col=1, secondary_y=False)
-        if 'CH_2' in df.columns:
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_2'], name="O2 Exit (ppm)", legend="legend4", line=dict(color='#1bba3c', width=2)), row=4, col=1, secondary_y=False)
+        if 'CH_3' in df.columns:
+            y_o2 = scale_data(df['CH_3'], 0.0, 200.0)
+            fig.add_trace(go.Scatter(
+                x=df['DateTime'], y=y_o2, name="Oxygen (ppm O2)", legend="legend4", 
+                line=dict(color='#33FF57', width=2)
+            ), row=4, col=1, secondary_y=False)
 
-        # โยนชุดอัตราไหล N2 Flow ถัดไป (CH_19 หรือช่องสัญญาณเสริมความดัน) ไปที่แกนขวาหลัก (secondary_y=True)
-        if 'CH_19' in df.columns:
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_19'], name="N2 Flow (h3/h)", legend="legend4", line=dict(color='#3357FF', width=2)), row=4, col=1, secondary_y=True)
+        if 'CH_4' in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df['DateTime'], y=df['CH_4'], name="N2 Flow (h3/h)", legend="legend4", 
+                line=dict(color='#3357FF', width=2)
+            ), row=4, col=1, secondary_y=True)
 
         # ----------------------------------------------------
-        # กล่องที่ 5: Dew Point (สเกลทิศทางปกติอิงตามคลื่นสัญญาณ CH_23)
+        # กล่องที่ 5: Dew Point (สเกลตามจริง 10 ถึง -100 °Cdp - โ...
         # ----------------------------------------------------
         if 'CH_23' in df.columns:
-            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_23'], name="Dew Point", legend="legend5", line=dict(color='#E333FF', width=2, dash='dot')), row=5, col=1)
+            y_dew = scale_data(df['CH_23'], -100.0, 10.0)
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=y_dew, name="Dew Point", legend="legend5", line=dict(color='#E333FF', width=2, dash='dot')), row=5, col=1)
 
-        # 3. จัดสรรผังหน้าต่างแผงควบคุม และเรียงกลุ่ม Legend Box ไว้ขวาสุดของแต่ละชั้น
+        # 3. จัดสรรผังหน้าต่างแผงควบคุม และเรียงกลุ่ม Legend Box ไว้ขวาสุดประจำกล่องย่อย
         fig.update_layout(
             template="plotly_dark",
             height=1100, 
             hovermode="x unified",
-            title_text="Yokogawa Process Analyzer Master Dashboard (True Machine Synced Mode)",
+            title_text="Yokogawa Process Analyzer Dashboard (Production Stable Mode)",
             legend1=dict(traceorder="normal", x=1.02, y=0.94, bgcolor="rgba(0,0,0,0)"),
             legend2=dict(traceorder="normal", x=1.02, y=0.75, bgcolor="rgba(0,0,0,0)"),
             legend3=dict(traceorder="normal", x=1.02, y=0.55, bgcolor="rgba(0,0,0,0)"),
-            legend4=dict(traceorder="normal", x=1.02, y=0.35, bgcolor="rgba(0,0,0,0)"), # รวมพวก Oxygen และ N2 ไว้บล็อกขวาชั้นเดียวกันตามสั่ง
+            legend4=dict(traceorder="normal", x=1.02, y=0.35, bgcolor="rgba(0,0,0,0)"), 
             legend5=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)")
         )
         
-        # ปรับขอบเขตแกนให้ออโต้สเกลตามข้อมูลดิบของเครื่องบันทึกโดยไม่ล็อกสเกลบีบอัด เพื่อให้เห็นสโลปการขยับของสัญญาณจริง
-        fig.update_yaxes(title_text="Dryer Temp (°C)", autorange=True, row=1, col=1)
-        fig.update_yaxes(title_text="Heating Top (°C)", autorange=True, row=2, col=1)
-        fig.update_yaxes(title_text="Heating Bottom (°C)", autorange=True, row=3, col=1)
+        # ปรับขอบเขตล็อกช่วงสเกลแกน Y สอดคล้องตามมาตรฐานโรงงานจริง
+        fig.update_yaxes(title_text="Dryer Temp (°C)", range=[-10, 420], row=1, col=1)
+        fig.update_yaxes(title_text="Heating Top (°C)", range=, row=2, col=1)
+        fig.update_yaxes(title_text="Heating Bottom (°C)", range=, row=3, col=1)
         
-        # ล็อกป้ายข้อความแกนซ้ายและแกนขวาของกล่องที่ 4 แยกขาดกัน
-        fig.update_yaxes(title_text="Oxygen Exit & Entrance (ppm)", color="#33FF57", autorange=True, row=4, col=1, secondary_y=False)
+        fig.update_yaxes(title_text="Oxygen (ppm)", color="#33FF57", range=[-10, 210], row=4, col=1, secondary_y=False)
         fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#3357FF", autorange=True, row=4, col=1, secondary_y=True)
         
-        fig.update_yaxes(title_text="Dew Point (°Cdp)", autorange=True, row=5, col=1)
-        fig.update_xaxes(title_text="Date & Time (Synchronized Timeline)", row=5, col=1)
+        fig.update_yaxes(title_text="Dew Point (°Cdp)", range=[-110, 20], row=5, col=1)
+        fig.update_xaxes(title_text="Date & Time (Process Timeline)", row=5, col=1)
 
         st.plotly_chart(fig, use_container_width=True)
         
     else:
-        st.error("❌ ชุดตัวเลขในไฟล์ดิบสั้นเกินไป ไม่เพียงพอต่อการจัดวางระบบ 23 ช่องสัญญาณ")
+        st.error("❌ โครงสร้างชุดข้อมูลในไฟล์ .DAD ไม่สอดคล้องกับพารามิเตอร์ 23 ช่องสัญญาณ")
 else:
-    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟเทียบผังหน้าจอเครื่องจักรเสร็จสมบูรณ์")
+    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟกระบวนการผลิตรวมบนแผงควบคุมหลัก")
