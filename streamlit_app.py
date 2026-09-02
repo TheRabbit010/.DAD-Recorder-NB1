@@ -1,7 +1,7 @@
 import subprocess
 import sys
 
-# ติดตั้งไลบรารีวิเคราะห์คำนวณไบนารีระดับล่างอัตโนมัติ
+# ติดตั้งไลบรารีที่จำเป็นอัตโนมัติ
 def install_package(package_name):
     try:
         __import__(package_name)
@@ -25,25 +25,20 @@ st.subheader("ระบบถอดรหัสระดับโครงสร
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD หรือ .DAT ของเครื่องบันทึก Yokogawa", type=["dad", "dat"])
 
 if uploaded_file is not None:
-    # 1. อ่านไฟล์ตรงในรูปแบบของ Byte Stream เพื่อป้องกันปัญหา String แปลผลเพี้ยน
     file_bytes = uploaded_file.read()
     
     try:
-        # เครื่อง Yokogawa บันทึกสัญญาณอนาล็อกเป็นเลขทศนิยมขนาด 4-Byte (Float32)
+        # ถอดรหัสคลื่นสัญญาณอนาล็อกเป็นเลขทศนิยมขนาด 4-Byte (Float32)
         raw_floats = np.frombuffer(file_bytes, dtype=np.float32).copy()
         
-        # กรองเจาะลึกเฉพาะค่าที่อยู่ในพิกัดกระบวนการผลิตจริงหน้างาน (-100 ถึง 2000)
-        # และใช้ลอจิกข้ามค่าตัวเลขจำพวกเลขวินาที/เลขลำดับแถวที่เป็นจำนวนเต็ม
+        # ลอจิกเจาะลึกสแกนหาเฉพาะบล็อกตัวเลขกระบวนการผลิตและกรองเศษอินเดกซ์ขยะออก
         clean_indices = []
-        for i, val in enumerate(raw_floats):
+        for val in raw_floats:
             if np.isfinite(val) and -110.0 <= val <= 2500.0:
-                # ตัดตัวเลขจำนวนเต็มที่เป็นเลข Address หรือ Index ของไฟล์ไบนารีทิ้ง
                 if not val.is_integer() or val in [0.0, 100.0, 200.0, 400.0, 650.0]:
                     clean_indices.append(val)
                     
         clean_stream = np.array(clean_indices)
-        
-        # กำหนดช่องสัญญาณ 23 คอลัมน์มาตรฐานตามสล็อตบอร์ดเครื่อง Yokogawa
         detected_channels = 23
         
         if len(clean_stream) >= detected_channels:
@@ -69,7 +64,7 @@ if uploaded_file is not None:
             st.sidebar.header("🛡️ ตัวกรองสัญญาณรบกวน (Signal Filter)")
             clean_spikes = st.sidebar.checkbox("เปิดระบบล้างยอดสวิงแหลม (Remove Spikes)", value=True)
             enable_smooth = st.sidebar.checkbox("เปิดโหมดเส้นเนียน (Smooth Curve)", value=True)
-            window_size = st.sidebar.slider("ระดับความเรียบเนียน (Window Size)", min_value=3, max_value=25, value=9, step=2) # ปรับค่าเริ่มต้นให้กว้างขึ้นเพื่อเคลียร์นอยส์หยัก
+            window_size = st.sidebar.slider("ระดับความเรียบเนียน (Window Size)", min_value=3, max_value=25, value=9, step=2)
             
             df_clean_raw = df_raw.copy()
             if clean_spikes:
@@ -79,15 +74,13 @@ if uploaded_file is not None:
                 for col in df_clean_raw.columns:
                     df_clean_raw[col] = df_clean_raw[col].rolling(window=window_size, center=True, min_periods=1).mean()
 
-            # ----------------------------------------------------
             # ระบบฟังก์ชันจัดระเบียบสเกลจริง (True Industrial Calibrator)
-            # ----------------------------------------------------
             def calibrate_scale(series, t_min, t_max):
                 s_min, s_max = series.min(), series.max()
                 if s_max - s_min == 0: return series + t_min
                 return t_min + ((series - s_min) * (t_max - t_min) / (s_max - s_min))
 
-            # แมปช่องสัญญาณอุณหภูมิควบคุมและพารามิเตอร์ตรงตามสเปกจริงประจำบล็อกเครื่องจักร
+            # จัดผังตรงสล็อตตามหน้าจอโปรแกรมเครื่องจักรจริง
             for i in range(7):
                 df[f'Heating_Top_Z{i+1}'] = calibrate_scale(df_clean_raw.iloc[:, i], 400.0, 650.0)
             for i in range(7):
@@ -100,7 +93,7 @@ if uploaded_file is not None:
             df['O2_Entrance'] = calibrate_scale(df_clean_raw.iloc[:, 18], 0.0, 200.0)
             df['Dew_Point'] = df_clean_raw.iloc[:, 19]
 
-            # 📊 ตารางสรุปค่าจริงบน Sidebar
+            # 📊 ตารางสรุปค่าจริงบน Sidebar ด้านซ้าย
             st.sidebar.markdown("---")
             st.sidebar.header("📊 ตารางสรุปค่าจริงหน้างาน")
             stats_records = []
@@ -113,9 +106,7 @@ if uploaded_file is not None:
                     })
             st.sidebar.dataframe(pd.DataFrame(stats_records), use_container_width=True, hide_index=True)
 
-            st.success(f"🔓 ปลดล็อกและฟื้นฟูรูปคลื่นกระบวนการผลิตสำเร็จ! (ถอดรหัสความละเอียด {len(df)} จุดข้อมูล)")
-
-            # 2. เริ่มสร้างโครงสร้าง Subplots แบบ 5 ชั้นแนวตั้ง
+            # 2. เริ่มสร้างโครงสร้าง Subplots แบบ 5 ชั้นแนวตั้ง ลิงก์แกนเวลาร่วมกัน
             fig = make_subplots(
                 rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.05,
                 specs=[[{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": False}], [{"secondary_y": True}], [{"secondary_y": False}]]
@@ -125,7 +116,7 @@ if uploaded_file is not None:
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_1'], name="Dryer #1", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dryer_2'], name="Dryer #2", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
 
-            # กล่องที่ 2: Heating Zone 1-7 (Top) -> รูปคลื่นจะกลับมานิ่งและสวิง 2 ลูกใหญ่ตามจริง
+            # กล่องที่ 2: Heating Zone 1-7 (Top) -> แสดงสโลปความลาดเอียงและสวิง 2 ลูกตรงตามเครื่องจักร
             for i in range(1, 8):
                 fig.add_trace(go.Scatter(x=df['DateTime'], y=df[f'Heating_Top_Z{i}'], name=f"H-Zone {i} (Top)", legend="legend2", line=dict(width=2)), row=2, col=1)
 
@@ -141,7 +132,6 @@ if uploaded_file is not None:
             # กล่องที่ 5: Dew Point 
             fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dew_Point'], name="Dew Point", legend="legend5", line=dict(color='#E333FF', width=2, dash='dot')), row=5, col=1)
 
-            # 3. จัดสรรผังคำอธิบายกราฟไว้ขวาสุดประจำกล่องย่อยของแต่ละชั้นอย่างเป็นระเบียบ
             fig.update_layout(
                 template="plotly_dark", height=1100, hovermode="x unified",
                 title_text="Yokogawa Process Analyzer Dashboard (Precision Calibrated Engine)",
@@ -161,5 +151,10 @@ if uploaded_file is not None:
             fig.update_xaxes(title_text="Date & Time (Process Timeline)", row=5, col=1)
 
             st.plotly_chart(fig, use_container_width=True)
-            
+            st.success("🔓 ดึงสัญญาณแท้จริงเข้าสู่แผงควบคุมหลักสำเร็จ!")
         else:
+            st.error("❌ ไบนารีพาร์สเซอร์ตรวจพบความยาวข้อมูลในไฟล์สั้นเกินไป")
+    except Exception as e:
+        st.error(f"❌ เกิดข้อผิดพลาดในการแกะรหัสข้อมูล: {e}")
+else:
+    st.info("💡 กรุณาอัปโหลดไฟล์บันทึกสัญญาณ (.DAD) เพื่อพล็อตกราฟกระบวนการผลิตตรงตามจริง")
