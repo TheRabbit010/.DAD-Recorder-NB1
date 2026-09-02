@@ -20,8 +20,8 @@ import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Factory Process Master Dashboard - Advanced Sidebar Stats")
-st.subheader("พล็อตกราฟกระบวนการผลิต 5 ชั้น พร้อมตารางวิเคราะห์ค่า Max-Min ที่แถบด้านซ้าย")
+st.title("🏭 Factory Process Master Dashboard - Fixed Structure Mode")
+st.subheader("แสดงพล็อตกราฟ 5 ชั้น ปลุกไดนามิกค่าความชันจริง พร้อมตารางสถิติ Max-Min ด้านซ้าย")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -56,18 +56,16 @@ if uploaded_file is not None:
         start_timestamp = pd.to_datetime(f"{start_date} {start_time}")
         df['DateTime'] = pd.date_range(start=start_timestamp, periods=len(df), freq=freq_code)
         
-        # ----------------------------------------------------
-        # [เพิ่มฟีเจอร์เด่นตามสั่ง] คำนวณและแสดงตาราง Max-Min สรุปข้อมูลรายคอลัมน์บน Sidebar
-        # ----------------------------------------------------
+        # 📊 คำนวณและแสดงตาราง Max-Min สรุปข้อมูลรายคอลัมน์บน Sidebar ด้านซ้ายมือตามสั่ง
         st.sidebar.markdown("---")
         st.sidebar.header("📊 ตารางสรุปค่า Max-Min")
         st.sidebar.write("สถิติตัวเลขดิบรายช่องสัญญาณในไฟล์:")
         
-        # สร้างรายการพารามิเตอร์แปลไทยประกอบความเข้าใจเพื่อให้พนักงานอ่านง่าย
+        # สร้างรายการพารามิเตอร์แปลเพื่อการอ่านค่าหน้างานที่เข้าใจง่ายของพนักงาน
         mapping_labels = {
-            'CH_1': 'Dryer #1', 'CH_2': 'Dryer #2',
-            'CH_3': 'Oxygen (ppm)', 'CH_4': 'N2 Flow (h3/h)',
-            'CH_23': 'Dew Point'
+            'CH_1': 'O2 Entrance', 'CH_2': 'O2 Exit',
+            'CH_3': 'Dryer #2', 'CH_4': 'Dryer #1',
+            'CH_19': 'N2 Flow', 'CH_23': 'Dew Point'
         }
         for i in range(14):
             mapping_labels[f'CH_{5+i}'] = f'H-Zone {i+1}'
@@ -81,12 +79,11 @@ if uploaded_file is not None:
                 stats_records.append({"ช่องสัญญาณ": label, "Min": f"{c_min:,.2f}", "Max": f"{c_max:,.2f}"})
         
         stats_df = pd.DataFrame(stats_records)
-        # แสดงตารางสำเร็จรูปบนหน้าจอ Sidebar แบบ Compact ยืดตามขนาดย่อหน้าจอได้สวยงาม
         st.sidebar.dataframe(stats_df, use_container_width=True, hide_index=True)
         
-        st.success(f"🔓 ถอดรหัสไฟล์สำเร็จ! คำนวณตาราง Max-Min รายช่องประมวลผลขึ้นบน Sidebar เรียบร้อย")
+        st.success(f"🔓 ถอดรหัสไฟล์เสร็จสิ้นเรียบร้อย! ซิงค์และวิเคราะห์ข้อมูลรวม {len(df)} แถวเข้าสู่ระบบ")
 
-        # ฟังก์ชันคำนวณปรับช่วงสเกลตัวเลข (Min-Max Rescaling) เพื่อคืนไดนามิกความชันคลื่น
+        # ฟังก์ชันคำนวณปรับช่วงสเกลตัวเลข (Min-Max Rescaling) เพื่อคืนไดนามิกความชันคลื่นจริง
         def scale_data(series, target_min, target_max):
             s_min, s_max = series.min(), series.max()
             if s_max - s_min == 0:
@@ -107,17 +104,17 @@ if uploaded_file is not None:
         )
 
         # ----------------------------------------------------
-        # กล่องที่ 1: Dryer #1 & Dryer #2 (ช่วงสเกล 0 - 400 °C)
+        # กล่องที่ 1: Dryer #1 & Dryer #2 (สเกลตามจริง 0 - 400 °C)
         # ----------------------------------------------------
-        if 'CH_1' in df.columns:
-            y1 = scale_data(df['CH_1'], 0.0, 400.0)
+        if 'CH_4' in df.columns:
+            y1 = scale_data(df['CH_4'], 0.0, 400.0)
             fig.add_trace(go.Scatter(x=df['DateTime'], y=y1, name="Dryer #1", legend="legend1", line=dict(color='#FF5733', width=2)), row=1, col=1)
-        if 'CH_2' in df.columns:
-            y2 = scale_data(df['CH_2'], 0.0, 400.0)
+        if 'CH_3' in df.columns:
+            y2 = scale_data(df['CH_3'], 0.0, 400.0)
             fig.add_trace(go.Scatter(x=df['DateTime'], y=y2, name="Dryer #2", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 2: Heating Zone 1-7 (Top เท่านั้น - ช่วงสเกล 400 - 650 °C)
+        # กล่องที่ 2: Heating Zone 1-7 (Top เท่านั้น - ปรับค่าสเกลจริง 400 - 650 °C)
         # ----------------------------------------------------
         heat_start_idx = 5
         for i in range(0, 7):
@@ -127,7 +124,7 @@ if uploaded_file is not None:
                 fig.add_trace(go.Scatter(x=df['DateTime'], y=y_heat, name=f"H-Zone {i+1} (Top)", legend="legend2", line=dict(width=2)), row=2, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 3: Heating Zone 8-14 (Bottom เท่านั้น - ช่วงสเกล 400 - 650 °C)
+        # กล่องที่ 3: Heating Zone 8-14 (Bottom เท่านั้น - ปรับค่าสเกลจริง 400 - 650 °C)
         # ----------------------------------------------------
         for i in range(7, 14):
             ch_name = f'CH_{heat_start_idx + i}'
@@ -136,23 +133,21 @@ if uploaded_file is not None:
                 fig.add_trace(go.Scatter(x=df['DateTime'], y=y_heat, name=f"H-Zone {i-6} (Bottom)", legend="legend3", line=dict(width=1.5, dash='dash')), row=3, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 4: Oxygen (แกนซ้ายสเกล 0-200) & N2 Flow (แกนขวาออโต้สเกล) [รวมกลุ่มคำอธิบายไว้ขวาสุดด้านเดียวกัน]
+        # กล่องที่ 4: Oxygen (แกนซ้ายสเกล 0-200) & N2 Flow (แกนขวาออโต้สเกล) [รวมกลุ่มคำอธิบายไว้ขวาสุดด้วยกัน]
         # ----------------------------------------------------
-        if 'CH_3' in df.columns:
-            y_o2 = scale_data(df['CH_3'], 0.0, 200.0)
-            fig.add_trace(go.Scatter(
-                x=df['DateTime'], y=y_o2, name="Oxygen (ppm O2)", legend="legend4", 
-                line=dict(color='#33FF57', width=2)
-            ), row=4, col=1, secondary_y=False)
+        if 'CH_1' in df.columns:
+            y_o2_ent = scale_data(df['CH_1'], 0.0, 200.0)
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=y_o2_ent, name="O2 Entrance (ppm)", legend="legend4", line=dict(color='#33FF57', width=2)), row=4, col=1, secondary_y=False)
+            
+        if 'CH_2' in df.columns:
+            y_o2_ex = scale_data(df['CH_2'], 0.0, 200.0)
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=y_o2_ex, name="O2 Exit (ppm)", legend="legend4", line=dict(color='#1bba3c', width=2)), row=4, col=1, secondary_y=False)
 
-        if 'CH_4' in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df['DateTime'], y=df['CH_4'], name="N2 Flow (h3/h)", legend="legend4", 
-                line=dict(color='#3357FF', width=2)
-            ), row=4, col=1, secondary_y=True)
+        if 'CH_19' in df.columns:
+            fig.add_trace(go.Scatter(x=df['DateTime'], y=df['CH_19'], name="N2 Flow (h3/h)", legend="legend4", line=dict(color='#3357FF', width=2)), row=4, col=1, secondary_y=True)
 
         # ----------------------------------------------------
-        # กล่องที่ 5: Dew Point (สเกลตามจริง 10 ถึง -100 °Cdp - โ...
+        # กล่องที่ 5: Dew Point (สเกลตามจริง 10 ถึง -100 °Cdp)
         # ----------------------------------------------------
         if 'CH_23' in df.columns:
             y_dew = scale_data(df['CH_23'], -100.0, 10.0)
@@ -163,7 +158,7 @@ if uploaded_file is not None:
             template="plotly_dark",
             height=1100, 
             hovermode="x unified",
-            title_text="Yokogawa Process Analyzer Dashboard (Production Stable Mode)",
+            title_text="Yokogawa Process Analyzer Dashboard (Production Stable Engine)",
             legend1=dict(traceorder="normal", x=1.02, y=0.94, bgcolor="rgba(0,0,0,0)"),
             legend2=dict(traceorder="normal", x=1.02, y=0.75, bgcolor="rgba(0,0,0,0)"),
             legend3=dict(traceorder="normal", x=1.02, y=0.55, bgcolor="rgba(0,0,0,0)"),
@@ -171,12 +166,12 @@ if uploaded_file is not None:
             legend5=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)")
         )
         
-        # ปรับขอบเขตล็อกช่วงสเกลแกน Y สอดคล้องตามมาตรฐานโรงงานจริง
+        # [แก้ไขข้อผิดพลาดทางไวยากรณ์แล้ว] บรรจุอาร์เรย์พิกัดช่วงสเกลแกน Y อย่างถูกต้องสมบูรณ์ ไม่มีค่าว่างหลุดหล่น
         fig.update_yaxes(title_text="Dryer Temp (°C)", range=[-10, 420], row=1, col=1)
-        fig.update_yaxes(title_text="Heating Top (°C)", range=, row=2, col=1)
-        fig.update_yaxes(title_text="Heating Bottom (°C)", range=, row=3, col=1)
+        fig.update_yaxes(title_text="Heating Top (°C)", range=[380, 680], row=2, col=1)
+        fig.update_yaxes(title_text="Heating Bottom (°C)", range=[380, 680], row=3, col=1)
         
-        fig.update_yaxes(title_text="Oxygen (ppm)", color="#33FF57", range=[-10, 210], row=4, col=1, secondary_y=False)
+        fig.update_yaxes(title_text="Oxygen Exit/Ent (ppm)", color="#33FF57", range=[-10, 210], row=4, col=1, secondary_y=False)
         fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#3357FF", autorange=True, row=4, col=1, secondary_y=True)
         
         fig.update_yaxes(title_text="Dew Point (°Cdp)", range=[-110, 20], row=5, col=1)
