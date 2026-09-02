@@ -19,8 +19,8 @@ import re
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏭 Integrated Process Dashboard - Fixed Layout")
-st.subheader("พล็อตกราฟรวมแกนอัตโนมัติ แก้ไขข้อผิดพลาดของระบบแสดงผล")
+st.title("🏭 Integrated Process Dashboard - Core Layout Engine")
+st.subheader("พล็อตกราฟรวมแกนควบคุมกระบวนการผลิตผ่านโครงสร้างยืดหยุ่นสูง")
 
 uploaded_file = st.file_uploader("อัปโหลดไฟล์ดิบ .DAD ของคุณที่นี่", type=["dad", "dat"])
 
@@ -34,7 +34,7 @@ if uploaded_file is not None:
     clean_stream = [n for n in numeric_stream if -150.0 < n < 5000.0]
     
     if len(clean_stream) > 10:
-        # บังคับหาตัวหารตามจำนวนคอลัมน์จริงเพื่อจัดโครงสร้าง
+        # หาจำนวนคอลัมน์จริงเพื่อจัดโครงสร้าง
         detected_channels = 4
         for ch in range(4, 32):
             if len(clean_stream) % ch == 0:
@@ -97,38 +97,39 @@ if uploaded_file is not None:
                 line=dict(color='#E333FF', width=2, dash='dot'), yaxis="y3"
             ))
 
-        # 3. ตั้งค่าการจัดวางแกน Y (แก้ไขโครงสร้างเพื่อแก้ไข ValueError 100%)
+        # 3. ตั้งค่าการจัดวางแกน Layout พื้นฐานหลักเพื่อป้องกันข้อผิดพลาดเด็ดขาด
         fig.update_layout(
             template="plotly_dark",
             height=780,
             hovermode="x unified",
-            xaxis=dict(title="Timeline Index", domain=[0, 0.85]), # เว้นช่องขวาไว้ 15% สำหรับวางแกน Y
-            
-            # แกนซ้ายหลัก
+            xaxis=dict(title="Timeline Index", domain=[0, 0.85]),
             yaxis=dict(
-                title="Temperature (°C) & N2 Flow (h3/h)",
+                title="Temperature (°C) & N2 Flow (h3/h) [แกนซ้าย]",
                 titlefont=dict(color="#FF8D33"),
                 tickfont=dict(color="#FF8D33")
-            ),
-            
-            # แกนขวาหลัก (y2)
+            )
+        )
+        
+        # 4. ประกาศขยายแกน Y2 และ Y3 เสริมแยกบรรทัด เพื่อเลี่ยงการเกิดความขัดแย้งของดิกชันนารี
+        fig.update_layout(
             yaxis2=dict(
-                title="Oxygen Concentration (ppm O2)",
+                title="Oxygen Concentration (ppm O2) [แกนขวาหลัก]",
                 titlefont=dict(color="#33FF57"),
                 tickfont=dict(color="#33FF57"),
                 overlaying="y",
                 side="right"
-            ),
-            
-            # แกนขวาสุดแยกสเกลอิสระ (y3) - เปิด anchor='free' เพื่อให้ใช้คู่กับ position ได้โดยไม่พัง
+            )
+        )
+        
+        fig.update_layout(
             yaxis3=dict(
-                title="Dew Point (Auto-Scaled)",
+                title="Dew Point [แกนขวาสุด - Auto Scale]",
                 titlefont=dict(color="#E333FF"),
                 tickfont=dict(color="#E333FF"),
                 overlaying="y",
                 side="right",
                 anchor="free",
-                position=0.95,
+                position=0.94,
                 autorange=True
             )
         )
