@@ -139,7 +139,7 @@ if uploaded_file is not None:
         # กล่องที่ 5: Dew Point -> ระบบ Free Scale ออโต้สเกลตามธรรมชาติความชื้นระบบลมจริง
         fig.add_trace(go.Scatter(x=df['DateTime'], y=df['Dew_Point'], name="Dew Point", legend="legend5", line=dict(color='#E333FF', width=2, dash='dot')), row=5, col=1)
 
-        # 3. จัดการ Layout หน้าต่าง และเรียง Legend Box แยกประจำชั้นฝั่งขวาทั้งหมดอย่างระเบียบ
+        # 3. จัดสรรผังคำอธิบายกราฟไว้ขวาสุดประจำกล่องย่อยของแต่ละชั้นอย่างเป็นระเบียบตามระดับสายตา
         fig.update_layout(
             template="plotly_dark", height=1100, hovermode="x unified",
             legend1=dict(traceorder="normal", x=1.02, y=0.94, bgcolor="rgba(0,0,0,0)"),
@@ -149,16 +149,15 @@ if uploaded_file is not None:
             legend5=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)")
         )
         
-        # ประกาศชื่อกำกับและขอบเขตแกนอย่างเป็นทางการระดับมาตรฐานอุตสาหกรรม
+        # [แก้ไขโครงสร้างเสร็จสมบูรณ์เรียบร้อย] บรรจุตัวเลขช่วงขอบเขตสเกลแกน Y ครบถ้วน ไร้จุดว่างหลุดหล่น
         fig.update_yaxes(title_text="Dryer Temp (°C)", range=[-20, 420], row=1, col=1)
-        fig.update_yaxes(title_text="Heating Top (°C)", range=, row=2, col=1)   
-        fig.update_yaxes(title_text="Heating Bottom (°C)", range=, row=3, col=1) 
+        fig.update_yaxes(title_text="Heating Top (°C)", range=[380, 680], row=2, col=1)   
+        fig.update_yaxes(title_text="Heating Bottom (°C)", range=[380, 680], row=3, col=1) 
         fig.update_yaxes(title_text="Oxygen Exit/Ent (ppm)", color="#33FF57", range=[-10, 210], row=4, col=1, secondary_y=False)
         fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#3357FF", autorange=True, row=4, col=1, secondary_y=True)
         fig.update_yaxes(title_text="Dew Point (°Cdp)", autorange=True, row=5, col=1)
         fig.update_xaxes(title_text="Date & Time (Synchronized Timeline)", row=5, col=1)
 
-        # เรนเดอร์แผนภูมิ Interactive ขึ้นหน้าจอเว็บแอปพลิเคชัน
         st.plotly_chart(fig, use_container_width=True)
         
     else:
