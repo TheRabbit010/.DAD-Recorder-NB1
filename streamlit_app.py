@@ -87,7 +87,7 @@ if uploaded_file is not None:
             fig.add_trace(go.Scatter(x=df['DateTime'], y=y2, name="Dryer #2", legend="legend1", line=dict(color='#FF8D33', width=2)), row=1, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 2 [แยกออกมาเฉพาะ]: Heating Zone 1-7 (Top เท่านั้น - สเกล 580 - 650 °C)
+        # กล่องที่ 2: Heating Zone 1-7 (Top เท่านั้น - สเกล 580 - 650 °C)
         # ----------------------------------------------------
         heat_start_idx = 5
         for i in range(0, 7):
@@ -97,7 +97,7 @@ if uploaded_file is not None:
                 fig.add_trace(go.Scatter(x=df['DateTime'], y=y_heat, name=f"H-Zone {i+1} (Top)", legend="legend2", line=dict(width=1.5)), row=2, col=1)
 
         # ----------------------------------------------------
-        # กล่องที่ 3 [แยกออกมาเฉพาะ]: Heating Zone 8-14 (Bottom เท่านั้น - สเกล 580 - 650 °C)
+        # กล่องที่ 3: Heating Zone 8-14 (Bottom เท่านั้น - สเกล 580 - 650 °C)
         # ----------------------------------------------------
         for i in range(7, 14):
             ch_name = f'CH_{heat_start_idx + i}'
@@ -111,13 +111,13 @@ if uploaded_file is not None:
         if 'CH_3' in df.columns:
             y_o2 = scale_data(df['CH_3'], 0.0, 200.0)
             fig.add_trace(go.Scatter(
-                x=df['DateTime'], y=y_o2, name="Oxygen (ppm O2)", legend="legend4", # วางไว้ฝั่งขวาปกติ
+                x=df['DateTime'], y=y_o2, name="Oxygen (ppm O2)", legend="legend4", 
                 line=dict(color='#33FF57', width=2)
             ), row=4, col=1, secondary_y=False)
 
         if 'CH_4' in df.columns:
             fig.add_trace(go.Scatter(
-                x=df['DateTime'], y=df['CH_4'], name="N2 Flow (h3/h)", legend="legend5", # [แยกใหม่] โยนรายชื่อไปกล่องที่ 5 (ฝั่งซ้ายหน้าจอ)
+                x=df['DateTime'], y=df['CH_4'], name="N2 Flow (h3/h)", legend="legend5", 
                 line=dict(color='#3357FF', width=2)
             ), row=4, col=1, secondary_y=True)
 
@@ -131,25 +131,25 @@ if uploaded_file is not None:
         # 3. จัดสรรผังตารางคำอธิบาย (Legends Layout) กระจายแยกบล็อกเป็นสัดส่วน ไม่ซ้อนกัน
         fig.update_layout(
             template="plotly_dark",
-            height=1100, # เพิ่มความสูงแนวตั้งรองรับ 5 กล่องย่อย
+            height=1100, 
             hovermode="x unified",
             title_text="Yokogawa Process Analyzer Dashboard (Advanced Separation Mode)",
             
-            # กลุ่ม Legend Box ฝั่งขวาของหน้าจอ (ดึงตำแหน่งตามแนวระดับสายตาของแต่ละกล่อง)
+            # บล็อกคำอธิบายฝั่งขวาของหน้าจอ (จัดพิกัดแยกตามระดับความสูงของแต่ละกล่อง)
             legend1=dict(traceorder="normal", x=1.02, y=0.94, bgcolor="rgba(0,0,0,0)"),
             legend2=dict(traceorder="normal", x=1.02, y=0.75, bgcolor="rgba(0,0,0,0)"),
             legend3=dict(traceorder="normal", x=1.02, y=0.55, bgcolor="rgba(0,0,0,0)"),
-            legend4=dict(traceorder="normal", x=1.02, y=0.35, bgcolor="rgba(0,0,0,0)"), # ของ Oxygen
-            legend6=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)"), # ของ Dew Point
+            legend4=dict(traceorder="normal", x=1.02, y=0.35, bgcolor="rgba(0,0,0,0)"), # ป้าย Oxygen
+            legend6=dict(traceorder="normal", x=1.02, y=0.12, bgcolor="rgba(0,0,0,0)"), # ป้าย Dew Point
             
-            # [แยกพิเศษตามสั่ง] ย้ายกล่องคำอธิบายของ N2 Flow ไปหลบไว้ที่ฝั่งซ้ายของหน้าจอ (x = -0.18) เพื่อไม่ให้ตีกับ Oxygen
+            # ย้ายกล่องคำอธิบายของ N2 Flow หลบไปอยู่ฝั่งซ้ายสุดของหน้าจอ เพื่อแก้การตีกันกับ Oxygen
             legend5=dict(traceorder="normal", x=-0.18, y=0.35, bgcolor="rgba(0,0,0,0)")
         )
         
-        # ปรับขอบเขตแกน Y ประจำแต่ละกล่องย่อยให้เสถียรและแม่นยำตามพารามิเตอร์ควบคุมของคุณ
-        fig.update_yaxes(title_text="Dryer Temp (°C)", range=, row=1, col=1)
-        fig.update_yaxes(title_text="Heating Top (°C)", range=, row=2, col=1)
-        fig.update_yaxes(title_text="Heating Bottom (°C)", range=, row=3, col=1)
+        # [แก้ไขแล้ว] บรรจุตัวเลขช่วงขอบเขตสเกลแกน Y อย่างสมบูรณ์ ถูกต้องตาม Syntax ของ Python 100%
+        fig.update_yaxes(title_text="Dryer Temp (°C)", range=[180, 420], row=1, col=1)
+        fig.update_yaxes(title_text="Heating Top (°C)", range=[560, 670], row=2, col=1)
+        fig.update_yaxes(title_text="Heating Bottom (°C)", range=[560, 670], row=3, col=1)
         
         fig.update_yaxes(title_text="Oxygen (ppm O2)", color="#33FF57", range=[-10, 220], row=4, col=1, secondary_y=False)
         fig.update_yaxes(title_text="N2 Flow (h3/h)", color="#3357FF", autorange=True, row=4, col=1, secondary_y=True)
