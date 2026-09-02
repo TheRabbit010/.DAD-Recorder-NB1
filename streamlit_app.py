@@ -29,7 +29,7 @@ if uploaded_file is not None:
     file_bytes = uploaded_file.read()
     text_data = file_bytes.decode('latin-1', errors='ignore')
     
-    # 1. ปรับปรุงลอจิกการขูดข้อมูลเชิงลึก (Deep Excavator) เพื่อจับทศนิยมทุกตำแหน่งในไฟล์ Binary
+    # 1. ลอจิกการขูดข้อมูลเชิงลึก (Deep Excavator) เพื่อจับทศนิยมทุกตำแหน่งในไฟล์ Binary
     # รองรับตั้งแต่ทศนิยมสั้น ทศนิยมยาว เลขยกกำลังวิทยาศาสตร์ (e-05) และจำนวนเต็มเครื่องมือวัด
     all_numbers = re.findall(r'[-+]?\d*\.\d+(?:[eE][-+]?\d+)?|\b\d{1,4}\b', text_data)
     numeric_stream = [float(n) for n in all_numbers]
@@ -38,9 +38,9 @@ if uploaded_file is not None:
     clean_stream = [n for n in numeric_stream if -200.0 < n < 6000.0]
     
     if len(clean_stream) > 10:
-        # ระบบค้นหาและสุ่มหาจำนวนคอลัมน์อัตโนมัติ
-        detected_channels = 23 # ล็อกค่าตามโครงสร้างสถานีเครื่องบันทึกที่คุณรันผ่านล่าสุด
-        for ch in:
+        # [แก้ไขแล้ว] ระบบค้นหาและหารจำนวนคอลัมน์อัตโนมัติโดยไม่ติด SyntaxError
+        detected_channels = 23 # ล็อกค่ามาตรฐานตามเครื่องบันทึกของคุณ
+        for ch in range(4, 32):
             if len(clean_stream) % ch == 0:
                 detected_channels = ch
                 break
@@ -63,7 +63,7 @@ if uploaded_file is not None:
             vertical_spacing=0.06,
             specs=[[{"secondary_y": False}],
                    [{"secondary_y": False}],
-                   [{"secondary_y": True}],  # เปิดแกนคู่เฉพาะกล่องที่ 3 สำหรับ O2 และ N2 Flow
+                   [{"secondary_y": True}],  # เปิดแกนคู่สำหรับ O2 และ N2 Flow
                    [{"secondary_y": False}]]
         )
 
@@ -116,7 +116,7 @@ if uploaded_file is not None:
                 line=dict(color='#E333FF', width=2, dash='dot')
             ), row=4, col=1)
 
-        # 3. ตั้งค่า Layout ภาพรวมแบบคลีน
+        # 3. ตั้งค่า Layout ภาพรวม
         fig.update_layout(
             template="plotly_dark",
             height=950,
